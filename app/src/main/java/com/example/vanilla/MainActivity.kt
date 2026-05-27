@@ -2,9 +2,13 @@ package com.example.vanilla
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -19,10 +23,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -40,6 +46,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,8 +62,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -79,9 +88,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent {
-            VanillaApp()
-        }
+        setContent { VanillaApp() }
     }
 }
 
@@ -92,17 +99,9 @@ private data class ChatMessage(
 )
 
 private data class GlassSettings(
-    val topButtonSize: Float = 52f,
-    val topPillWidth: Float = 164f,
-    val topPillHeight: Float = 52f,
-    val avatarSize: Float = 34f,
-    val inputHeight: Float = 60f,
-    val drawerWidth: Float = 304f,
-    val settingsSheetWidth: Float = 340f,
-    val topSidePadding: Float = 16f,
-    val glassBlur: Float = 4f,
-    val lensHeight: Float = 6f,
-    val lensAmount: Float = 10f,
+    val glassBlur: Float = 1f,
+    val lensHeight: Float = 18f,
+    val lensAmount: Float = 18f,
     val glassAlpha: Float = 0.30f,
     val highlightAlpha: Float = 0.65f,
     val shadowAlpha: Float = 0.07f,
@@ -114,8 +113,10 @@ private fun VanillaApp() {
     var glassSettings by remember { mutableStateOf(GlassSettings()) }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var glassDetailOpen by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
-    var nextMessageId by remember { mutableStateOf(3) }
+    var nextMessageId by remember { mutableIntStateOf(3) }
+    var inputBarHeightPx by remember { mutableIntStateOf(92) }
 
     val messages = remember {
         mutableStateListOf(
@@ -124,10 +125,37 @@ private fun VanillaApp() {
         )
     }
 
-    val chatOffsetPx = 0
-    val backdrop = rememberLayerBackdrop()
+    BackHandler(enabled = glassDetailOpen) { glassDetailOpen = false }
+    BackHandler(enabled = settingsOpen && !glassDetailOpen) { settingsOpen = false }
+    BackHandler(enabled = drawerOpen && !settingsOpen && !glassDetailOpen) { drawerOpen = false }
 
-    Box(Modifier.fillMaxSize()) {
+    val drawerProgress by animateFloatAsState(
+        targetValue = if (drawerOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 420),
+        label = "drawerProgress"
+    )
+    val settingsProgress by animateFloatAsState(
+        targetValue = if (settingsOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 380),
+        label = "settingsProgress"
+    )
+    val detailProgress by animateFloatAsState(
+        targetValue = if (glassDetailOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 360),
+        label = "detailProgress"
+    )
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val screenWidthPx = with(density) { maxWidth.toPx() }
+        val chatOffsetPx = (screenWidthPx * drawerProgress).roundToInt()
+        val drawerOffsetPx = (screenWidthPx * (drawerProgress - 1f)).roundToInt()
+        val settingsOffsetPx = (screenWidthPx * (1f - settingsProgress)).roundToInt()
+        val detailOffsetPx = (screenWidthPx * (1f - detailProgress)).roundToInt()
+        val detailUnderOffsetPx = (screenWidthPx * -0.18f * detailProgress).roundToInt()
+        val inputBottomPadding = with(density) { inputBarHeightPx.toDp() + 26.dp }
+        val backdrop = rememberLayerBackdrop()
+
         Box(
             Modifier
                 .fillMaxSize()
@@ -136,15 +164,36 @@ private fun VanillaApp() {
             BackgroundScene()
             ChatScene(
                 messages = messages,
-                settings = glassSettings,
-                chatOffsetPx = chatOffsetPx
+                chatOffsetPx = chatOffsetPx,
+                bottomPadding = inputBottomPadding
             )
+
+            if (drawerProgress > 0.001f) {
+                DrawerScene(drawerOffsetPx = drawerOffsetPx)
+            }
+
+            if (settingsProgress > 0.001f) {
+                SettingsHomeScene(
+                    offsetPx = settingsOffsetPx + detailUnderOffsetPx,
+                    onOpenGlassSettings = { glassDetailOpen = true }
+                )
+            }
+
+            if (detailProgress > 0.001f) {
+                GlassStyleSettingsScene(
+                    backdrop = backdrop,
+                    settings = glassSettings,
+                    offsetPx = detailOffsetPx,
+                    onSettingsUpdate = { update -> glassSettings = update(glassSettings) }
+                )
+            }
         }
+
         ChatTopBar(
             backdrop = backdrop,
             settings = glassSettings,
             chatOffsetPx = chatOffsetPx,
-            onMenuClick = { drawerOpen = !drawerOpen },
+            onMenuClick = { drawerOpen = true },
             onAddClick = { }
         )
 
@@ -154,6 +203,7 @@ private fun VanillaApp() {
             chatOffsetPx = chatOffsetPx,
             value = inputText,
             onValueChange = { inputText = it },
+            onHeightChanged = { inputBarHeightPx = it },
             onSend = {
                 val text = inputText.trim()
                 if (text.isNotEmpty()) {
@@ -163,19 +213,16 @@ private fun VanillaApp() {
                 }
             }
         )
-        DrawerScene(
-            settings = glassSettings,
-            visible = drawerOpen,
-            onDismiss = { drawerOpen = false },
-            onSettingsClick = { settingsOpen = true }
-        )
 
-        SettingsSheetOverlay(
-            settings = glassSettings,
-            visible = settingsOpen,
-            onDismiss = { settingsOpen = false },
-            onSettingsChange = { glassSettings = it }
-        )
+        if (drawerProgress > 0.001f && !settingsOpen) {
+            DrawerSettingsButton(
+                backdrop = backdrop,
+                settings = glassSettings,
+                drawerOffsetPx = drawerOffsetPx,
+                alpha = drawerProgress,
+                onClick = { settingsOpen = true }
+            )
+        }
     }
 }
 
@@ -197,102 +244,52 @@ private fun BackgroundScene() {
             )
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(
-                color = Color(0xFF8EA2FF).copy(alpha = 0.22f),
-                radius = size.minDimension * 0.36f,
-                center = Offset(size.width * 0.16f, size.height * 0.22f)
-            )
-            drawCircle(
-                color = Color(0xFFFF8DB3).copy(alpha = 0.18f),
-                radius = size.minDimension * 0.32f,
-                center = Offset(size.width * 0.86f, size.height * 0.14f)
-            )
-            drawCircle(
-                color = Color(0xFF63D6B8).copy(alpha = 0.17f),
-                radius = size.minDimension * 0.34f,
-                center = Offset(size.width * 0.82f, size.height * 0.82f)
-            )
+            drawCircle(Color(0xFF8EA2FF).copy(alpha = 0.22f), size.minDimension * 0.36f, Offset(size.width * 0.16f, size.height * 0.22f))
+            drawCircle(Color(0xFFFF8DB3).copy(alpha = 0.18f), size.minDimension * 0.32f, Offset(size.width * 0.86f, size.height * 0.14f))
+            drawCircle(Color(0xFF63D6B8).copy(alpha = 0.17f), size.minDimension * 0.34f, Offset(size.width * 0.82f, size.height * 0.82f))
             drawGlassLines()
         }
     }
 }
 
 private fun DrawScope.drawGlassLines() {
-    val lineColor = Color.White.copy(alpha = 0.34f)
+    val lineColor = Color.White.copy(alpha = 0.28f)
     val strokeWidth = 2.dp.toPx()
-    repeat(8) { index ->
-        val y = size.height * (0.16f + index * 0.09f)
-        drawLine(
-            color = lineColor,
-            start = Offset(size.width * 0.08f, y),
-            end = Offset(size.width * 0.92f, y + 48.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round
-        )
+    repeat(7) { index ->
+        val y = size.height * (0.18f + index * 0.1f)
+        drawLine(lineColor, Offset(size.width * 0.08f, y), Offset(size.width * 0.92f, y + 42.dp.toPx()), strokeWidth, StrokeCap.Round)
     }
 }
 
 @Composable
-private fun DrawerScene(
-    settings: GlassSettings,
-    visible: Boolean,
-    onDismiss: () -> Unit,
-    onSettingsClick: () -> Unit
-) {
-    if (!visible) return
-
+private fun DrawerScene(drawerOffsetPx: Int) {
     Box(
         Modifier
+            .offset { IntOffset(drawerOffsetPx, 0) }
             .fillMaxSize()
             .background(Color(0xFFF7F8FC))
-            .padding(horizontal = (settings.topSidePadding + 6f).dp)
+            .padding(horizontal = 22.dp)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(top = 22.dp, bottom = 22.dp),
+                .padding(top = 26.dp, bottom = 112.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                BasicText(
-                    text = "A界面",
-                    style = TextStyle(
-                        color = Color(0xFF1F2937),
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                PlainRoundButton(text = "×", onClick = onDismiss)
-            }
-
             BasicText(
-                text = "这里是普通全屏页面，不使用液态玻璃、不使用模糊。",
-                style = TextStyle(
-                    color = Color(0xFF344054).copy(alpha = 0.78f),
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp
-                )
+                text = "A界面",
+                style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
             )
-
+            BasicText(
+                text = "从左侧推出并占满屏幕。使用系统边缘返回手势回到聊天界面。",
+                style = TextStyle(Color(0xFF344054).copy(alpha = 0.78f), fontSize = 15.sp, lineHeight = 22.sp)
+            )
             DrawerItem("聊天历史")
             DrawerItem("置顶联系人")
             DrawerItem("收藏气泡")
             DrawerItem("本地草稿")
-
-            Spacer(Modifier.weight(1f))
-
-            PlainTextButton("设置") {
-                onSettingsClick()
-            }
-            PlainTextButton("返回聊天") {
-                onDismiss()
-            }
         }
     }
 }
@@ -308,11 +305,7 @@ private fun DrawerItem(text: String) {
     ) {
         BasicText(
             text = text,
-            style = TextStyle(
-                color = Color(0xFF263344),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            style = TextStyle(Color(0xFF263344), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         )
     }
 }
@@ -320,8 +313,8 @@ private fun DrawerItem(text: String) {
 @Composable
 private fun ChatScene(
     messages: List<ChatMessage>,
-    settings: GlassSettings,
-    chatOffsetPx: Int
+    chatOffsetPx: Int,
+    bottomPadding: androidx.compose.ui.unit.Dp
 ) {
     Box(
         Modifier
@@ -330,17 +323,10 @@ private fun ChatScene(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                top = 122.dp,
-                bottom = (settings.inputHeight + 42f).dp,
-                start = 16.dp,
-                end = 16.dp
-            ),
+            contentPadding = PaddingValues(top = 122.dp, bottom = bottomPadding, start = 16.dp, end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(messages, key = { it.id }) { message ->
-                MessageBubble(message)
-            }
+            items(messages, key = { it.id }) { message -> MessageBubble(message) }
         }
     }
 }
@@ -367,11 +353,7 @@ private fun MessageBubble(message: ChatMessage) {
         ) {
             BasicText(
                 text = message.text,
-                style = TextStyle(
-                    color = if (message.fromMe) Color.White else Color(0xFF222B3A),
-                    fontSize = 16.sp,
-                    lineHeight = 22.sp
-                )
+                style = TextStyle(if (message.fromMe) Color.White else Color(0xFF222B3A), fontSize = 16.sp, lineHeight = 22.sp)
             )
         }
     }
@@ -390,49 +372,33 @@ private fun ChatTopBar(
             .offset { IntOffset(chatOffsetPx, 0) }
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = settings.topSidePadding.dp, vertical = 12.dp)
-            .height(settings.topButtonSize.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .height(50.dp),
         contentAlignment = Alignment.Center
     ) {
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(settings.topButtonSize.dp),
+            modifier = Modifier.align(Alignment.CenterStart).size(50.dp),
             shape = Capsule(),
             onClick = onMenuClick
-        ) {
-            MenuIcon()
-        }
+        ) { MenuIcon() }
 
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .width(settings.topPillWidth.dp)
-                .height(settings.topPillHeight.dp),
+            modifier = Modifier.align(Alignment.Center).width(132.dp).height(50.dp),
             shape = Capsule()
         ) {
             Row(
-                Modifier.padding(horizontal = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Modifier.fillMaxSize().padding(start = 7.dp, end = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    Modifier
-                        .size(settings.avatarSize.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF687BFF))
-                )
+                Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFF687BFF)))
                 BasicText(
                     text = "friend",
-                    style = TextStyle(
-                        color = Color(0xFF202838),
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    style = TextStyle(Color(0xFF202838), fontSize = 17.sp, fontWeight = FontWeight.Bold)
                 )
             }
         }
@@ -440,14 +406,10 @@ private fun ChatTopBar(
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(settings.topButtonSize.dp),
+            modifier = Modifier.align(Alignment.CenterEnd).size(50.dp),
             shape = Capsule(),
             onClick = onAddClick
-        ) {
-            PlusIcon(fontSize = 30)
-        }
+        ) { PlusIcon(fontSize = 30) }
     }
 }
 
@@ -458,56 +420,53 @@ private fun BoxScope.ChatInputBar(
     chatOffsetPx: Int,
     value: String,
     onValueChange: (String) -> Unit,
+    onHeightChanged: (Int) -> Unit,
     onSend: () -> Unit
 ) {
+    val textScroll = rememberScrollState()
+
     Box(
         Modifier
             .offset { IntOffset(chatOffsetPx, 0) }
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
+            .imePadding()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .height(settings.inputHeight.dp)
+            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp, top = 6.dp)
+            .heightIn(min = 58.dp, max = 148.dp)
+            .onSizeChanged { onHeightChanged(it.height) }
     ) {
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier.fillMaxSize(),
-            shape = Capsule()
+            modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp, max = 132.dp),
+            shape = RoundedCornerShape(29.dp)
         ) {
             Row(
-                Modifier
-                    .fillMaxSize()
-                    .padding(start = 16.dp, end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Box(
-                    Modifier.size(34.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    PlusIcon(fontSize = 32)
-                }
+                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { PlusIcon(fontSize = 32) }
 
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f),
-                    textStyle = TextStyle(
-                        color = Color(0xFF162033),
-                        fontSize = 17.sp
-                    ),
-                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 38.dp, max = 96.dp)
+                        .verticalScroll(textScroll)
+                        .padding(top = 8.dp, bottom = 7.dp),
+                    textStyle = TextStyle(Color(0xFF162033), fontSize = 17.sp, lineHeight = 24.sp),
+                    singleLine = false,
+                    maxLines = 4,
                     cursorBrush = SolidColor(Color(0xFF4A7DFF)),
                     decorationBox = { innerTextField ->
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (value.isEmpty()) {
                                 BasicText(
                                     text = "Message",
-                                    style = TextStyle(
-                                        color = Color(0xFF697386).copy(alpha = 0.70f),
-                                        fontSize = 17.sp
-                                    )
+                                    style = TextStyle(Color(0xFF697386).copy(alpha = 0.70f), fontSize = 17.sp)
                                 )
                             }
                             innerTextField()
@@ -515,122 +474,195 @@ private fun BoxScope.ChatInputBar(
                     }
                 )
 
-                SendButton(
-                    size = (settings.inputHeight - 14f).coerceAtLeast(40f),
-                    onClick = onSend
-                )
+                SendButton(size = 42f, onClick = onSend)
             }
         }
     }
 }
 
-
 @Composable
-private fun SettingsSheetOverlay(
+private fun DrawerSettingsButton(
+    backdrop: Backdrop,
     settings: GlassSettings,
-    visible: Boolean,
-    onDismiss: () -> Unit,
-    onSettingsChange: (GlassSettings) -> Unit
+    drawerOffsetPx: Int,
+    alpha: Float,
+    onClick: () -> Unit
 ) {
-    if (!visible) return
-
     Box(
         Modifier
+            .offset { IntOffset(drawerOffsetPx, 0) }
+            .fillMaxSize()
+    ) {
+        GlassSurface(
+            backdrop = backdrop,
+            settings = settings,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .navigationBarsPadding()
+                .padding(start = 22.dp, bottom = 26.dp)
+                .size(58.dp),
+            shape = Capsule(),
+            onClick = onClick
+        ) {
+            BasicText(
+                text = "⚙",
+                style = TextStyle(Color(0xFF202838).copy(alpha = alpha), fontSize = 25.sp, textAlign = TextAlign.Center)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsHomeScene(
+    offsetPx: Int,
+    onOpenGlassSettings: () -> Unit
+) {
+    Box(
+        Modifier
+            .offset { IntOffset(offsetPx, 0) }
             .fillMaxSize()
             .background(Color(0xFFF7F8FC))
+            .padding(horizontal = 22.dp)
     ) {
-        SettingsPanel(
-            settings = settings,
-            onDismiss = onDismiss,
-            onSettingsChange = onSettingsChange
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(top = 26.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            BasicText(
+                text = "设置",
+                style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            )
+            BasicText(
+                text = "使用系统边缘返回手势回到上一级。",
+                style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 20.sp)
+            )
+            SettingsListItem("液态玻璃样式设置", "调整模糊、折射、高光和阴影", onOpenGlassSettings)
+        }
+    }
+}
+
+@Composable
+private fun SettingsListItem(title: String, subtitle: String, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color.White)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            BasicText(
+                text = title,
+                style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            )
+            BasicText(
+                text = subtitle,
+                style = TextStyle(Color(0xFF667085), fontSize = 13.sp)
+            )
+        }
+        BasicText(
+            text = "›",
+            style = TextStyle(Color(0xFF98A2B3), fontSize = 28.sp, fontWeight = FontWeight.Medium)
         )
     }
 }
 
 @Composable
-private fun SettingsPanel(
+private fun GlassStyleSettingsScene(
+    backdrop: Backdrop,
     settings: GlassSettings,
-    onDismiss: () -> Unit,
-    onSettingsChange: (GlassSettings) -> Unit
+    offsetPx: Int,
+    onSettingsUpdate: ((GlassSettings) -> GlassSettings) -> Unit
 ) {
     Column(
         Modifier
+            .offset { IntOffset(offsetPx, 0) }
             .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
             .statusBarsPadding()
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 22.dp, vertical = 22.dp),
+            .padding(horizontal = 22.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                BasicText(
-                    text = "设置",
-                    style = TextStyle(
-                        color = Color(0xFF1E2430),
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                BasicText(
-                    text = "UI尺寸 / 玻璃参数（仅聊天页）",
-                    style = TextStyle(
-                        color = Color(0xFF5C667A),
-                        fontSize = 13.sp
-                    )
-                )
-            }
-            PlainRoundButton(text = "×", onClick = onDismiss)
-        }
+        BasicText(
+            text = "液态玻璃样式",
+            style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        )
+        BasicText(
+            text = "顶部预览会实时使用下面的参数。",
+            style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 20.sp)
+        )
 
-        SettingsGroupTitle("界面尺寸")
-        ParamSlider("顶部圆按钮", settings.topButtonSize, 44f..72f, "dp") {
-            onSettingsChange(settings.copy(topButtonSize = it))
-        }
-        ParamSlider("顶部药丸宽度", settings.topPillWidth, 132f..220f, "dp") {
-            onSettingsChange(settings.copy(topPillWidth = it))
-        }
-        ParamSlider("顶部药丸高度", settings.topPillHeight, 44f..70f, "dp") {
-            onSettingsChange(settings.copy(topPillHeight = it))
-        }
-        ParamSlider("头像直径", settings.avatarSize, 24f..48f, "dp") {
-            onSettingsChange(settings.copy(avatarSize = it))
-        }
-        ParamSlider("输入框高度", settings.inputHeight, 52f..82f, "dp") {
-            onSettingsChange(settings.copy(inputHeight = it))
-        }
+        GlassPreviewCard(backdrop = backdrop, settings = settings)
 
         SettingsGroupTitle("液态玻璃")
         ParamSlider("背景模糊", settings.glassBlur, 0f..24f, "px") {
-            onSettingsChange(settings.copy(glassBlur = it))
+            onSettingsUpdate { current -> current.copy(glassBlur = it) }
         }
-        ParamSlider("折射高度", settings.lensHeight, 0f..28f, "px") {
-            onSettingsChange(settings.copy(lensHeight = it))
+        ParamSlider("折射高度", settings.lensHeight, 0f..36f, "px") {
+            onSettingsUpdate { current -> current.copy(lensHeight = it) }
         }
         ParamSlider("折射强度", settings.lensAmount, 0f..48f, "px") {
-            onSettingsChange(settings.copy(lensAmount = it))
+            onSettingsUpdate { current -> current.copy(lensAmount = it) }
         }
         ParamSlider("玻璃白色层", settings.glassAlpha, 0f..0.75f, "%") {
-            onSettingsChange(settings.copy(glassAlpha = it))
+            onSettingsUpdate { current -> current.copy(glassAlpha = it) }
         }
         ParamSlider("高光", settings.highlightAlpha, 0f..1f, "%") {
-            onSettingsChange(settings.copy(highlightAlpha = it))
+            onSettingsUpdate { current -> current.copy(highlightAlpha = it) }
         }
         ParamSlider("外阴影", settings.shadowAlpha, 0f..0.35f, "%") {
-            onSettingsChange(settings.copy(shadowAlpha = it))
+            onSettingsUpdate { current -> current.copy(shadowAlpha = it) }
         }
         ParamSlider("内阴影", settings.innerShadowAlpha, 0f..0.45f, "%") {
-            onSettingsChange(settings.copy(innerShadowAlpha = it))
+            onSettingsUpdate { current -> current.copy(innerShadowAlpha = it) }
         }
 
         PlainTextButton("恢复默认") {
-            onSettingsChange(GlassSettings())
+            onSettingsUpdate { GlassSettings() }
         }
         Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun GlassPreviewCard(backdrop: Backdrop, settings: GlassSettings) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(32.dp))
+            .background(Color(0xFFE8ECF7))
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.glass_preview),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        GlassSurface(
+            backdrop = backdrop,
+            settings = settings,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .width(172.dp)
+                .height(52.dp),
+            shape = Capsule()
+        ) {
+            BasicText(
+                text = "Glass Preview",
+                style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            )
+        }
     }
 }
 
@@ -638,11 +670,7 @@ private fun SettingsPanel(
 private fun SettingsGroupTitle(text: String) {
     BasicText(
         text = text,
-        style = TextStyle(
-            color = Color(0xFF202838),
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
+        style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
     )
 }
 
@@ -658,8 +686,7 @@ private fun ParamSlider(
     var widthPx by remember { mutableStateOf(1f) }
     val knobSize = 22.dp
     val knobPx = with(density) { knobSize.toPx() }
-    val fraction = ((value - range.start) / (range.endInclusive - range.start))
-        .coerceIn(0f, 1f)
+    val fraction = ((value - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
 
     fun updateFromX(x: Float) {
         val newFraction = (x / widthPx).coerceIn(0f, 1f)
@@ -675,18 +702,11 @@ private fun ParamSlider(
         ) {
             BasicText(
                 text = label,
-                style = TextStyle(
-                    color = Color(0xFF344054),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                style = TextStyle(Color(0xFF344054), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             )
             BasicText(
                 text = formatSettingValue(value, suffix),
-                style = TextStyle(
-                    color = Color(0xFF667085),
-                    fontSize = 12.sp
-                )
+                style = TextStyle(Color(0xFF667085), fontSize = 12.sp)
             )
         }
 
@@ -695,7 +715,7 @@ private fun ParamSlider(
                 .fillMaxWidth()
                 .height(30.dp)
                 .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
-                .pointerInput(range, widthPx) {
+                .pointerInput(range, widthPx, onValueChange) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         updateFromX(down.position.x)
@@ -723,26 +743,17 @@ private fun ParamSlider(
             )
             Box(
                 Modifier
-                    .offset {
-                        IntOffset(
-                            x = (fraction * (widthPx - knobPx)).roundToInt(),
-                            y = 0
-                        )
-                    }
+                    .offset { IntOffset((fraction * (widthPx - knobPx)).roundToInt(), 0) }
                     .size(knobSize)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.88f))
+                    .background(Color.White.copy(alpha = 0.92f))
             )
         }
     }
 }
 
 private fun formatSettingValue(value: Float, suffix: String): String {
-    return if (suffix == "%") {
-        "${(value * 100f).roundToInt()}%"
-    } else {
-        "${value.roundToInt()}$suffix"
-    }
+    return if (suffix == "%") "${(value * 100f).roundToInt()}%" else "${value.roundToInt()}$suffix"
 }
 
 @Composable
@@ -761,18 +772,16 @@ private fun GlassSurface(
                 backdrop = backdrop,
                 shape = { shape },
                 effects = {
-                    blur(settings.glassBlur.dp.toPx())
+                    blur(settings.glassBlur)
                     if (settings.lensHeight > 0f && settings.lensAmount > 0f) {
                         lens(
-                            refractionHeight = settings.lensHeight.dp.toPx(),
-                            refractionAmount = settings.lensAmount.dp.toPx(),
+                            refractionHeight = settings.lensHeight,
+                            refractionAmount = settings.lensAmount,
                             chromaticAberration = false
                         )
                     }
                 },
-                highlight = {
-                    Highlight.Ambient.copy(alpha = settings.highlightAlpha)
-                },
+                highlight = { Highlight.Ambient.copy(alpha = settings.highlightAlpha) },
                 shadow = {
                     Shadow(
                         radius = 8.dp,
@@ -786,25 +795,17 @@ private fun GlassSurface(
                         alpha = settings.innerShadowAlpha
                     )
                 },
-                onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = settings.glassAlpha))
-                }
+                onDrawSurface = { drawRect(Color.White.copy(alpha = settings.glassAlpha)) }
             )
             .then(
                 if (onClick != null) {
-                    Modifier.clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                        onClick = onClick
-                    )
+                    Modifier.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
                 } else {
                     Modifier
                 }
             ),
         contentAlignment = Alignment.Center
-    ) {
-        content()
-    }
+    ) { content() }
 }
 
 @Composable
@@ -839,11 +840,7 @@ private fun SendButton(size: Float, onClick: () -> Unit) {
             .size(size.dp)
             .clip(CircleShape)
             .background(Color(0xFFE5E7EB))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         BasicText(
@@ -859,55 +856,20 @@ private fun SendButton(size: Float, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PlainRoundButton(text: String, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    Box(
-        Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.44f))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        BasicText(
-            text = text,
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 25.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
-            )
-        )
-    }
-}
-
-@Composable
 private fun PlainTextButton(text: String, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.38f))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
+            .background(Color.White)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) {
         BasicText(
             text = text,
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold
-            )
+            style = TextStyle(Color(0xFF202838), fontSize = 15.sp, fontWeight = FontWeight.Bold)
         )
     }
 }
