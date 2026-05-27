@@ -1,6 +1,7 @@
 package com.example.vanilla
 
 import android.os.Bundle
+import android.view.WindowManager
 import kotlin.system.exitProcess
 import java.util.Locale
 import java.util.Date
@@ -24,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,6 +57,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -93,12 +96,14 @@ import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installCrashLogger()
         enableEdgeToEdge()
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         super.onCreate(savedInstanceState)
 
         setContent {
@@ -292,6 +297,7 @@ private fun VanillaApp() {
     var glassSettings by remember { mutableStateOf(GlassSettings()) }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var apiDetailOpen by remember { mutableStateOf(false) }
     var glassDetailOpen by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     var nextMessageId by remember { mutableIntStateOf(3) }
@@ -305,8 +311,9 @@ private fun VanillaApp() {
     }
 
     BackHandler(enabled = glassDetailOpen) { glassDetailOpen = false }
-    BackHandler(enabled = settingsOpen && !glassDetailOpen) { settingsOpen = false }
-    BackHandler(enabled = drawerOpen && !settingsOpen && !glassDetailOpen) { drawerOpen = false }
+    BackHandler(enabled = apiDetailOpen) { apiDetailOpen = false }
+    BackHandler(enabled = settingsOpen && !apiDetailOpen && !glassDetailOpen) { settingsOpen = false }
+    BackHandler(enabled = drawerOpen && !settingsOpen && !apiDetailOpen && !glassDetailOpen) { drawerOpen = false }
 
     val drawerProgress by animateFloatAsState(
         targetValue = if (drawerOpen) 1f else 0f,
@@ -317,6 +324,11 @@ private fun VanillaApp() {
         targetValue = if (settingsOpen) 1f else 0f,
         animationSpec = tween(durationMillis = 380),
         label = "settingsProgress"
+    )
+    val apiProgress by animateFloatAsState(
+        targetValue = if (apiDetailOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 360),
+        label = "apiProgress"
     )
     val detailProgress by animateFloatAsState(
         targetValue = if (glassDetailOpen) 1f else 0f,
@@ -330,8 +342,10 @@ private fun VanillaApp() {
         val chatOffsetPx = (screenWidthPx * drawerProgress).roundToInt()
         val drawerOffsetPx = (screenWidthPx * (drawerProgress - 1f)).roundToInt()
         val settingsOffsetPx = (screenWidthPx * (1f - settingsProgress)).roundToInt()
+        val apiDetailOffsetPx = (screenWidthPx * (1f - apiProgress)).roundToInt()
         val detailOffsetPx = (screenWidthPx * (1f - detailProgress)).roundToInt()
-        val detailUnderOffsetPx = (screenWidthPx * -0.18f * detailProgress).roundToInt()
+        val settingsPushProgress = maxOf(apiProgress, detailProgress)
+        val detailUnderOffsetPx = (screenWidthPx * -0.18f * settingsPushProgress).roundToInt()
         val inputBottomPadding = with(density) { inputBarHeightPx.toDp() + 26.dp }
         val backdrop = rememberLayerBackdrop()
 
@@ -354,7 +368,14 @@ private fun VanillaApp() {
             if (settingsProgress > 0.001f) {
                 SettingsHomeScene(
                     offsetPx = settingsOffsetPx + detailUnderOffsetPx,
+                    onOpenApiSettings = { apiDetailOpen = true },
                     onOpenGlassSettings = { glassDetailOpen = true }
+                )
+            }
+
+            if (apiProgress > 0.001f) {
+                ApiProviderSettingsScene(
+                    offsetPx = apiDetailOffsetPx
                 )
             }
 
@@ -526,7 +547,7 @@ private fun MessageBubble(message: ChatMessage) {
                         bottomEnd = if (message.fromMe) 8.dp else 22.dp
                     )
                 )
-                .background(if (message.fromMe) Color(0xFF4A7DFF) else Color.White.copy(alpha = 0.78f))
+                .background(if (message.fromMe) Color(0xFF4A7DFF) else Color.White)
                 .padding(horizontal = 15.dp, vertical = 11.dp)
         ) {
             BasicText(
@@ -565,12 +586,12 @@ private fun ChatTopBar(
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier.align(Alignment.Center).width(132.dp).height(50.dp),
+            modifier = Modifier.align(Alignment.Center).width(116.dp).height(50.dp),
             shape = Capsule()
         ) {
             Row(
-                Modifier.fillMaxSize().padding(start = 7.dp, end = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxSize().padding(start = 7.dp, end = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFF687BFF)))
@@ -610,23 +631,25 @@ private fun BoxScope.ChatInputBar(
             .align(Alignment.BottomCenter)
             .imePadding()
             .navigationBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp, top = 6.dp)
+            .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
             .heightIn(min = 58.dp, max = 148.dp)
             .onSizeChanged { onHeightChanged(it.height) }
     ) {
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp, max = 132.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 58.dp, max = 132.dp),
             shape = RoundedCornerShape(29.dp)
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) { PlusIcon(fontSize = 32) }
-
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
@@ -635,7 +658,11 @@ private fun BoxScope.ChatInputBar(
                         .heightIn(min = 38.dp, max = 96.dp)
                         .verticalScroll(textScroll)
                         .padding(top = 8.dp, bottom = 7.dp),
-                    textStyle = TextStyle(Color(0xFF162033), fontSize = 17.sp, lineHeight = 24.sp),
+                    textStyle = TextStyle(
+                        color = Color(0xFF162033),
+                        fontSize = 17.sp,
+                        lineHeight = 24.sp
+                    ),
                     singleLine = false,
                     maxLines = 4,
                     cursorBrush = SolidColor(Color(0xFF4A7DFF)),
@@ -644,7 +671,10 @@ private fun BoxScope.ChatInputBar(
                             if (value.isEmpty()) {
                                 BasicText(
                                     text = "Message",
-                                    style = TextStyle(Color(0xFF697386).copy(alpha = 0.70f), fontSize = 17.sp)
+                                    style = TextStyle(
+                                        color = Color(0xFF697386).copy(alpha = 0.70f),
+                                        fontSize = 17.sp
+                                    )
                                 )
                             }
                             innerTextField()
@@ -693,6 +723,7 @@ private fun DrawerSettingsButton(
 @Composable
 private fun SettingsHomeScene(
     offsetPx: Int,
+    onOpenApiSettings: () -> Unit,
     onOpenGlassSettings: () -> Unit
 ) {
     Box(
@@ -700,55 +731,200 @@ private fun SettingsHomeScene(
             .offset { IntOffset(offsetPx, 0) }
             .fillMaxSize()
             .background(Color(0xFFF7F8FC))
-            .padding(horizontal = 22.dp)
+            .padding(horizontal = 24.dp)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(top = 26.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(top = 28.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.Start
         ) {
             BasicText(
                 text = "设置",
-                style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                style = TextStyle(
+                    color = Color(0xFF1F2937),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
             )
-            BasicText(
-                text = "使用系统边缘返回手势回到上一级。",
-                style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 20.sp)
+
+            Spacer(Modifier.height(16.dp))
+
+            SettingsListItem(
+                title = "API 提供商设置",
+                subtitle = "Base URL、API Key、模型名称",
+                onClick = onOpenApiSettings
             )
-            SettingsListItem("液态玻璃样式设置", "调整模糊、折射、高光和阴影", onOpenGlassSettings)
+
+            SettingsListItem(
+                title = "液态玻璃样式设置",
+                subtitle = "模糊、折射、高光和阴影",
+                onClick = onOpenGlassSettings
+            )
         }
     }
 }
 
 @Composable
-private fun SettingsListItem(title: String, subtitle: String, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    Row(
+private fun SettingsListItem(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    var showLongPressShape by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showLongPressShape) {
+        if (showLongPressShape) {
+            delay(520)
+            showLongPressShape = false
+        }
+    }
+
+    Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.White)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (showLongPressShape) {
+                    Color.White.copy(alpha = 0.78f)
+                } else {
+                    Color.Transparent
+                }
+            )
+            .pointerInput(onClick) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { showLongPressShape = true }
+                )
+            }
+            .padding(start = 8.dp, end = 8.dp, top = 13.dp, bottom = 13.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalAlignment = Alignment.Start
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            BasicText(
-                text = title,
-                style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            )
-            BasicText(
-                text = subtitle,
-                style = TextStyle(Color(0xFF667085), fontSize = 13.sp)
-            )
-        }
         BasicText(
-            text = "›",
-            style = TextStyle(Color(0xFF98A2B3), fontSize = 28.sp, fontWeight = FontWeight.Medium)
+            text = title,
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+
+        BasicText(
+            text = subtitle,
+            style = TextStyle(
+                color = Color(0xFF667085),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        )
+    }
+}
+
+@Composable
+private fun ApiProviderSettingsScene(offsetPx: Int) {
+    var baseUrl by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var modelName by remember { mutableStateOf("") }
+
+    Column(
+        Modifier
+            .offset { IntOffset(offsetPx, 0) }
+            .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        BasicText(
+            text = "API 提供商",
+            style = TextStyle(
+                color = Color(0xFF1F2937),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        ApiTextField(
+            label = "Base URL",
+            value = baseUrl,
+            placeholder = "https://api.example.com/v1",
+            onValueChange = { baseUrl = it }
+        )
+
+        ApiTextField(
+            label = "API Key",
+            value = apiKey,
+            placeholder = "sk-...",
+            onValueChange = { apiKey = it }
+        )
+
+        ApiTextField(
+            label = "模型名称",
+            value = modelName,
+            placeholder = "gpt-4o-mini / deepseek-chat / ...",
+            onValueChange = { modelName = it }
+        )
+    }
+}
+
+@Composable
+private fun ApiTextField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        BasicText(
+            text = label,
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White.copy(alpha = 0.62f))
+                .padding(horizontal = 16.dp, vertical = 15.dp),
+            singleLine = true,
+            textStyle = TextStyle(
+                color = Color(0xFF162033),
+                fontSize = 15.sp
+            ),
+            cursorBrush = SolidColor(Color(0xFF4A7DFF)),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        BasicText(
+                            text = placeholder,
+                            style = TextStyle(
+                                color = Color(0xFF667085).copy(alpha = 0.62f),
+                                fontSize = 15.sp
+                            )
+                        )
+                    }
+                    innerTextField()
+                }
+            }
         )
     }
 }
@@ -772,7 +948,7 @@ private fun GlassStyleSettingsScene(
     ) {
         BasicText(
             text = "液态玻璃样式",
-            style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
         )
         BasicText(
             text = "顶部预览会实时使用下面的参数。",
