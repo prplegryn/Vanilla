@@ -17,6 +17,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -46,6 +51,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -81,8 +88,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -142,6 +151,11 @@ private data class AppSettings(
     val chatBackgroundUri: String = "",
     val backgroundBlur: Float = 0f,
     val backgroundDim: Float = 0.15f,
+    val topScrimAlpha: Float = 0.22f,
+    val topScrimHeight: Float = 58f,
+    val bottomScrimAlpha: Float = 0.26f,
+    val bottomScrimHeight: Float = 82f,
+    val scrimSmoothness: Float = 220f,
     val glass: GlassSettings = GlassSettings()
 )
 
@@ -160,6 +174,7 @@ private fun VanillaApp() {
     var settingsOpen by remember { mutableStateOf(false) }
     var assistantDetailOpen by remember { mutableStateOf(false) }
     var apiDetailOpen by remember { mutableStateOf(false) }
+    var scrimDetailOpen by remember { mutableStateOf(false) }
     var glassDetailOpen by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     var nextMessageId by remember { mutableIntStateOf(1) }
@@ -169,18 +184,31 @@ private fun VanillaApp() {
     val sessions = remember {
         mutableStateListOf<String>().apply { addAll(loadSessions(context)) }
     }
+    val listState = rememberLazyListState()
 
     LaunchedEffect(sessions.toList()) {
         saveSessions(context, sessions)
     }
 
+    LaunchedEffect(
+        messages.size,
+        messages.lastOrNull()?.text,
+        messages.lastOrNull()?.isTyping,
+        inputBarHeightPx
+    ) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
     BackHandler(enabled = glassDetailOpen) { glassDetailOpen = false }
+    BackHandler(enabled = scrimDetailOpen) { scrimDetailOpen = false }
     BackHandler(enabled = apiDetailOpen) { apiDetailOpen = false }
     BackHandler(enabled = assistantDetailOpen) { assistantDetailOpen = false }
-    BackHandler(enabled = settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) {
+    BackHandler(enabled = settingsOpen && !assistantDetailOpen && !apiDetailOpen && !scrimDetailOpen && !glassDetailOpen) {
         settingsOpen = false
     }
-    BackHandler(enabled = drawerOpen && !settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) {
+    BackHandler(enabled = drawerOpen && !settingsOpen && !assistantDetailOpen && !apiDetailOpen && !scrimDetailOpen && !glassDetailOpen) {
         drawerOpen = false
     }
 
@@ -188,6 +216,7 @@ private fun VanillaApp() {
     val settingsProgress by animateFloatAsState(if (settingsOpen) 1f else 0f, tween(220), label = "settings")
     val assistantProgress by animateFloatAsState(if (assistantDetailOpen) 1f else 0f, tween(210), label = "assistant")
     val apiProgress by animateFloatAsState(if (apiDetailOpen) 1f else 0f, tween(210), label = "api")
+    val scrimProgress by animateFloatAsState(if (scrimDetailOpen) 1f else 0f, tween(210), label = "scrim")
     val glassProgress by animateFloatAsState(if (glassDetailOpen) 1f else 0f, tween(210), label = "glass")
 
     fun sendMessage() {
@@ -195,24 +224,57 @@ private fun VanillaApp() {
         if (text.isEmpty()) return
 
         val userMessage = ChatMessage(nextMessageId++, text, fromMe = true)
-        val typingMessage = ChatMessage(nextMessageId++, "", fromMe = false, isTyping = true)
-
         messages += userMessage
-        messages += typingMessage
         inputText = ""
 
         val history = messages.filter { !it.isTyping }
 
         scope.launch {
-            val reply = requestAiReply(appSettings, history)
-            val cleanReply = stripThinkTags(reply).ifBlank { "我没有收到有效回复。" }
-            val index = messages.indexOfFirst { it.id == typingMessage.id }
-            if (index >= 0) {
-                messages[index] = messages[index].copy(
-                    text = cleanReply,
-                    isTyping = false
-                )
+            var rawReply = ""
+            var aiMessageId: Int? = null
+
+            suspend fun ensureAiBubble(typing: Boolean) {
+                if (aiMessageId == null) {
+                    aiMessageId = nextMessageId++
+                    messages += ChatMessage(
+                        id = aiMessageId!!,
+                        text = "",
+                        fromMe = false,
+                        isTyping = typing
+                    )
+                }
             }
+
+            suspend fun updateAiBubble(text: String, typing: Boolean) {
+                ensureAiBubble(typing)
+                val index = messages.indexOfFirst { it.id == aiMessageId }
+                if (index >= 0) {
+                    messages[index] = messages[index].copy(
+                        text = text,
+                        isTyping = typing
+                    )
+                }
+            }
+
+            val finalReply = requestAiReplyStreaming(
+                settings = appSettings,
+                messages = history,
+                onDelta = { delta ->
+                    rawReply += delta
+                    val cleaned = stripThinkTags(rawReply)
+
+                    if (rawReply.contains("<think", ignoreCase = true) && cleaned.isBlank()) {
+                        updateAiBubble("", typing = true)
+                    } else if (cleaned.isNotBlank()) {
+                        updateAiBubble(cleaned, typing = false)
+                    }
+                }
+            )
+
+            val cleanedFinal = stripThinkTags(finalReply).ifBlank {
+                "我没有收到有效回复。"
+            }
+            updateAiBubble(cleanedFinal, typing = false)
         }
     }
 
@@ -224,8 +286,9 @@ private fun VanillaApp() {
         val settingsOffsetPx = (screenWidthPx * (1f - settingsProgress)).roundToInt()
         val assistantOffsetPx = (screenWidthPx * (1f - assistantProgress)).roundToInt()
         val apiOffsetPx = (screenWidthPx * (1f - apiProgress)).roundToInt()
+        val scrimOffsetPx = (screenWidthPx * (1f - scrimProgress)).roundToInt()
         val glassOffsetPx = (screenWidthPx * (1f - glassProgress)).roundToInt()
-        val pushedProgress = maxOf(assistantProgress, apiProgress, glassProgress)
+        val pushedProgress = maxOf(assistantProgress, apiProgress, scrimProgress, glassProgress)
         val settingsUnderOffsetPx = (screenWidthPx * -0.18f * pushedProgress).roundToInt()
         val inputBottomPadding = with(density) { inputBarHeightPx.toDp() + 26.dp }
         val backdrop = rememberLayerBackdrop()
@@ -240,14 +303,18 @@ private fun VanillaApp() {
             ChatScene(
                 messages = messages,
                 chatOffsetPx = chatOffsetPx,
-                bottomPadding = inputBottomPadding
+                bottomPadding = inputBottomPadding,
+                listState = listState
+            )
+
+            ChatEdgeScrims(
+                settings = appSettings,
+                chatOffsetPx = chatOffsetPx,
+                inputBarHeightPx = inputBarHeightPx
             )
 
             if (drawerProgress > 0.001f) {
-                DrawerScene(
-                    drawerOffsetPx = drawerOffsetPx,
-                    sessions = sessions
-                )
+                DrawerScene(drawerOffsetPx = drawerOffsetPx, sessions = sessions)
             }
 
             if (settingsProgress > 0.001f) {
@@ -255,6 +322,7 @@ private fun VanillaApp() {
                     offsetPx = settingsOffsetPx + settingsUnderOffsetPx,
                     onOpenAssistantSettings = { assistantDetailOpen = true },
                     onOpenApiSettings = { apiDetailOpen = true },
+                    onOpenScrimSettings = { scrimDetailOpen = true },
                     onOpenGlassSettings = { glassDetailOpen = true }
                 )
             }
@@ -271,6 +339,14 @@ private fun VanillaApp() {
                 ApiProviderSettingsScene(
                     settings = appSettings,
                     offsetPx = apiOffsetPx,
+                    onSettingsChange = ::updateSettings
+                )
+            }
+
+            if (scrimProgress > 0.001f) {
+                ChatScrimSettingsScene(
+                    settings = appSettings,
+                    offsetPx = scrimOffsetPx,
                     onSettingsChange = ::updateSettings
                 )
             }
@@ -294,7 +370,9 @@ private fun VanillaApp() {
             onAddClick = {
                 val firstText = messages.firstOrNull { !it.isTyping }?.text?.trim().orEmpty()
                 if (firstText.isNotEmpty()) {
-                    val title = firstText.replace("\n", " ").replace("\r", " ").take(32)
+                    val title = firstText.replace("
+", " ").replace("
+", " ").take(32)
                     sessions.add(title)
                     messages.clear()
                     inputText = ""
@@ -383,6 +461,62 @@ private fun DrawScope.drawGlassLines() {
 }
 
 @Composable
+private fun ChatEdgeScrims(
+    settings: AppSettings,
+    chatOffsetPx: Int,
+    inputBarHeightPx: Int
+) {
+    val density = LocalDensity.current
+    val inputBarHeightDp = with(density) { inputBarHeightPx.toDp() }
+
+    val smoothness = settings.scrimSmoothness
+        .roundToInt()
+        .coerceIn(60, 1200)
+
+    val bottomHeight by animateDpAsState(
+        targetValue = inputBarHeightDp + settings.bottomScrimHeight.dp,
+        animationSpec = tween(durationMillis = smoothness),
+        label = "bottomScrimHeight"
+    )
+
+    Box(
+        Modifier
+            .offset { IntOffset(chatOffsetPx, 0) }
+            .fillMaxSize()
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(settings.topScrimHeight.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = settings.topScrimAlpha.coerceIn(0f, 0.85f)),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(bottomHeight)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = settings.bottomScrimAlpha.coerceIn(0f, 0.85f))
+                        )
+                    )
+                )
+        )
+    }
+}
+
+@Composable
 private fun DrawerScene(
     drawerOffsetPx: Int,
     sessions: List<String>
@@ -456,13 +590,20 @@ private fun DrawerItem(text: String) {
 private fun ChatScene(
     messages: List<ChatMessage>,
     chatOffsetPx: Int,
-    bottomPadding: androidx.compose.ui.unit.Dp
+    bottomPadding: Dp,
+    listState: LazyListState
 ) {
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .offset { IntOffset(chatOffsetPx, 0) }
             .fillMaxSize(),
-        contentPadding = PaddingValues(top = 122.dp, bottom = bottomPadding, start = 16.dp, end = 16.dp),
+        contentPadding = PaddingValues(
+            top = 122.dp,
+            bottom = bottomPadding,
+            start = 16.dp,
+            end = 16.dp
+        ),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         items(messages, key = { it.id }) { message ->
@@ -507,19 +648,21 @@ private fun MessageBubble(message: ChatMessage) {
                     )
                 )
                 .background(if (message.fromMe) Color(0xFF4A7DFF) else Color.White)
-                .padding(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 10.dp)
+                .padding(start = 15.dp, end = 15.dp, top = 9.dp, bottom = 9.dp)
         ) {
             if (message.isTyping) {
                 TypingText()
-            } else {
+            } else if (message.fromMe) {
                 BasicText(
                     text = message.text,
                     style = TextStyle(
-                        color = if (message.fromMe) Color.White else Color(0xFF222B3A),
+                        color = Color.White,
                         fontSize = 16.sp,
                         lineHeight = 22.sp
                     )
                 )
+            } else {
+                FormattedAiMessage(message.text)
             }
         }
     }
@@ -528,24 +671,189 @@ private fun MessageBubble(message: ChatMessage) {
 @Composable
 private fun TypingText() {
     var dots by remember { mutableIntStateOf(1) }
-    var dim by remember { mutableStateOf(false) }
+    val transition = rememberInfiniteTransition(label = "typingAlpha")
+    val alpha by transition.animateFloat(
+        initialValue = 0.42f,
+        targetValue = 0.86f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(980),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "typingAlphaValue"
+    )
 
     LaunchedEffect(Unit) {
         while (true) {
-            delay(460)
+            delay(520)
             dots = if (dots >= 3) 1 else dots + 1
-            dim = !dim
         }
     }
 
     BasicText(
         text = "正在输入${".".repeat(dots)}",
         style = TextStyle(
-            color = Color(0xFF222B3A).copy(alpha = if (dim) 0.46f else 0.82f),
+            color = Color(0xFF222B3A).copy(alpha = alpha),
             fontSize = 16.sp,
             lineHeight = 22.sp
         )
     )
+}
+
+private sealed class MessagePart {
+    data class Text(val value: String) : MessagePart()
+    data class Code(val language: String, val value: String) : MessagePart()
+    data class Formula(val value: String) : MessagePart()
+}
+
+@Composable
+private fun FormattedAiMessage(text: String) {
+    val parts = remember(text) { parseMessageParts(text) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        parts.forEach { part ->
+            when (part) {
+                is MessagePart.Text -> {
+                    if (part.value.isNotBlank()) {
+                        BasicText(
+                            text = part.value.trim(),
+                            style = TextStyle(
+                                color = Color(0xFF222B3A),
+                                fontSize = 16.sp,
+                                lineHeight = 22.sp
+                            )
+                        )
+                    }
+                }
+                is MessagePart.Code -> {
+                    CodeBlock(part.language, part.value)
+                }
+                is MessagePart.Formula -> {
+                    FormulaBlock(part.value)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeBlock(language: String, code: String) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF101828))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        if (language.isNotBlank()) {
+            BasicText(
+                text = language,
+                style = TextStyle(
+                    color = Color.White.copy(alpha = 0.52f),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            )
+        }
+        BasicText(
+            text = code.trimEnd(),
+            style = TextStyle(
+                color = Color.White.copy(alpha = 0.90f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        )
+    }
+}
+
+@Composable
+private fun FormulaBlock(value: String) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFFF2F4F7))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        BasicText(
+            text = prettifyFormula(value),
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        )
+    }
+}
+
+private fun parseMessageParts(text: String): List<MessagePart> {
+    val result = mutableListOf<MessagePart>()
+    val codeRegex = Regex("```([A-Za-z0-9_+-]*)\n?([\s\S]*?)```")
+    var last = 0
+
+    codeRegex.findAll(text).forEach { match ->
+        val before = text.substring(last, match.range.first)
+        result += parseTextAndFormula(before)
+        result += MessagePart.Code(
+            language = match.groupValues.getOrNull(1).orEmpty(),
+            value = match.groupValues.getOrNull(2).orEmpty()
+        )
+        last = match.range.last + 1
+    }
+
+    result += parseTextAndFormula(text.substring(last))
+    return result.filter {
+        when (it) {
+            is MessagePart.Text -> it.value.isNotBlank()
+            is MessagePart.Code -> it.value.isNotBlank()
+            is MessagePart.Formula -> it.value.isNotBlank()
+        }
+    }
+}
+
+private fun parseTextAndFormula(text: String): List<MessagePart> {
+    val result = mutableListOf<MessagePart>()
+    val formulaRegex = Regex("(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))")
+    var last = 0
+
+    formulaRegex.findAll(text).forEach { match ->
+        val before = text.substring(last, match.range.first)
+        if (before.isNotBlank()) result += MessagePart.Text(before)
+
+        val raw = match.value
+            .removePrefix("$$").removeSuffix("$$")
+            .removePrefix("\[").removeSuffix("\]")
+            .removePrefix("\(").removeSuffix("\)")
+            .trim()
+
+        result += MessagePart.Formula(raw)
+        last = match.range.last + 1
+    }
+
+    val remain = text.substring(last)
+    if (remain.isNotBlank()) result += MessagePart.Text(remain)
+    return result
+}
+
+private fun prettifyFormula(value: String): String {
+    return value
+        .replace("\times", "×")
+        .replace("\cdot", "·")
+        .replace("\leq", "≤")
+        .replace("\geq", "≥")
+        .replace("\neq", "≠")
+        .replace("\approx", "≈")
+        .replace("\infty", "∞")
+        .replace("\sqrt", "√")
+        .replace("\pi", "π")
+        .replace("\alpha", "α")
+        .replace("\beta", "β")
+        .replace("\gamma", "γ")
+        .replace("\theta", "θ")
+        .replace("\lambda", "λ")
+        .replace("\mu", "μ")
 }
 
 @Composable
@@ -580,7 +888,7 @@ private fun ChatTopBar(
             shape = Capsule()
         ) {
             Row(
-                Modifier.fillMaxSize().padding(start = 7.dp, end = 5.dp),
+                Modifier.fillMaxSize().padding(start = 7.dp, end = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -704,6 +1012,7 @@ private fun SettingsHomeScene(
     offsetPx: Int,
     onOpenAssistantSettings: () -> Unit,
     onOpenApiSettings: () -> Unit,
+    onOpenScrimSettings: () -> Unit,
     onOpenGlassSettings: () -> Unit
 ) {
     Box(
@@ -732,6 +1041,7 @@ private fun SettingsHomeScene(
 
             SettingsListItem("AI 助手设定", "头像、名字、提示词和聊天背景", onOpenAssistantSettings)
             SettingsListItem("API 提供商设置", "Base URL、API Key、模型名称", onOpenApiSettings)
+            SettingsListItem("聊天界面渐变遮罩", "顶部、底部暗色渐变和过渡", onOpenScrimSettings)
             SettingsListItem("液态玻璃样式设置", "模糊、折射、高光和阴影", onOpenGlassSettings)
         }
     }
@@ -910,6 +1220,55 @@ private fun ApiProviderSettingsScene(
         }
         ApiTextField("模型名称", settings.modelName, "gpt-4o-mini / deepseek-chat / ...") {
             onSettingsChange(settings.copy(modelName = it))
+        }
+    }
+}
+
+@Composable
+private fun ChatScrimSettingsScene(
+    settings: AppSettings,
+    offsetPx: Int,
+    onSettingsChange: (AppSettings) -> Unit
+) {
+    Column(
+        Modifier
+            .offset { IntOffset(offsetPx, 0) }
+            .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 28.dp, vertical = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        BasicText(
+            text = "聊天渐变遮罩",
+            modifier = Modifier.padding(start = 2.dp),
+            style = TextStyle(
+                color = Color(0xFF1F2937),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+
+        ParamSlider("顶部暗色透明度", settings.topScrimAlpha, 0f..0.75f, "%") {
+            onSettingsChange(settings.copy(topScrimAlpha = it))
+        }
+
+        ParamSlider("顶部渐变高度", settings.topScrimHeight, 24f..120f, "px") {
+            onSettingsChange(settings.copy(topScrimHeight = it))
+        }
+
+        ParamSlider("底部暗色透明度", settings.bottomScrimAlpha, 0f..0.85f, "%") {
+            onSettingsChange(settings.copy(bottomScrimAlpha = it))
+        }
+
+        ParamSlider("底部渐变高度", settings.bottomScrimHeight, 32f..180f, "px") {
+            onSettingsChange(settings.copy(bottomScrimHeight = it))
+        }
+
+        ParamSlider("过渡平滑度", settings.scrimSmoothness, 60f..800f, "ms") {
+            onSettingsChange(settings.copy(scrimSmoothness = it))
         }
     }
 }
@@ -1301,6 +1660,11 @@ private fun loadAppSettings(context: Context): AppSettings {
         chatBackgroundUri = p.getString("chatBackgroundUri", "") ?: "",
         backgroundBlur = p.getFloat("backgroundBlur", 0f),
         backgroundDim = p.getFloat("backgroundDim", 0.15f),
+        topScrimAlpha = p.getFloat("topScrimAlpha", 0.22f),
+        topScrimHeight = p.getFloat("topScrimHeight", 58f),
+        bottomScrimAlpha = p.getFloat("bottomScrimAlpha", 0.26f),
+        bottomScrimHeight = p.getFloat("bottomScrimHeight", 82f),
+        scrimSmoothness = p.getFloat("scrimSmoothness", 220f),
         glass = glass
     )
 }
@@ -1317,6 +1681,11 @@ private fun saveAppSettings(context: Context, settings: AppSettings) {
         .putString("chatBackgroundUri", settings.chatBackgroundUri)
         .putFloat("backgroundBlur", settings.backgroundBlur)
         .putFloat("backgroundDim", settings.backgroundDim)
+        .putFloat("topScrimAlpha", settings.topScrimAlpha)
+        .putFloat("topScrimHeight", settings.topScrimHeight)
+        .putFloat("bottomScrimAlpha", settings.bottomScrimAlpha)
+        .putFloat("bottomScrimHeight", settings.bottomScrimHeight)
+        .putFloat("scrimSmoothness", settings.scrimSmoothness)
         .putFloat("glassBlur", settings.glass.glassBlur)
         .putFloat("lensHeight", settings.glass.lensHeight)
         .putFloat("lensAmount", settings.glass.lensAmount)
@@ -1351,9 +1720,10 @@ private fun saveSessions(context: Context, sessions: List<String>) {
         .apply()
 }
 
-private suspend fun requestAiReply(
+private suspend fun requestAiReplyStreaming(
     settings: AppSettings,
-    messages: List<ChatMessage>
+    messages: List<ChatMessage>,
+    onDelta: suspend (String) -> Unit
 ): String {
     val baseUrl = settings.apiBaseUrl.trim()
     val apiKey = settings.apiKey.trim()
@@ -1373,7 +1743,7 @@ private suspend fun requestAiReply(
 
             val body = JSONObject()
                 .put("model", model)
-                .put("stream", false)
+                .put("stream", true)
 
             val messageArray = JSONArray()
 
@@ -1404,6 +1774,7 @@ private suspend fun requestAiReply(
                 readTimeout = 60000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "text/event-stream")
                 setRequestProperty("Authorization", "Bearer $apiKey")
             }
 
@@ -1412,13 +1783,8 @@ private suspend fun requestAiReply(
             }
 
             val status = connection.responseCode
-            val responseText = if (status in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            }
-
             if (status !in 200..299) {
+                val responseText = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val errorMessage = runCatching {
                     JSONObject(responseText)
                         .optJSONObject("error")
@@ -1433,11 +1799,40 @@ private suspend fun requestAiReply(
                 }
             }
 
-            JSONObject(responseText)
-                .getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .optString("content")
+            val builder = StringBuilder()
+
+            connection.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val trimmed = line.trim()
+                    if (!trimmed.startsWith("data:")) return@forEach
+
+                    val data = trimmed.removePrefix("data:").trim()
+                    if (data == "[DONE]") return@useLines
+                    if (data.isBlank()) return@forEach
+
+                    val delta = runCatching {
+                        val choice = JSONObject(data)
+                            .getJSONArray("choices")
+                            .getJSONObject(0)
+
+                        val deltaObject = choice.optJSONObject("delta")
+                        val messageObject = choice.optJSONObject("message")
+
+                        deltaObject?.optString("content")
+                            ?: messageObject?.optString("content")
+                            ?: ""
+                    }.getOrDefault("")
+
+                    if (delta.isNotEmpty()) {
+                        builder.append(delta)
+                        withContext(Dispatchers.Main) {
+                            onDelta(delta)
+                        }
+                    }
+                }
+            }
+
+            builder.toString()
         }.getOrElse { e ->
             "请求出错：${e.message ?: e::class.java.simpleName}"
         }
