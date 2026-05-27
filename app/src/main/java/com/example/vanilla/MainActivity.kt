@@ -4,8 +4,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -56,7 +54,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -72,7 +69,6 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
@@ -104,13 +100,13 @@ private data class GlassSettings(
     val drawerWidth: Float = 304f,
     val settingsSheetWidth: Float = 340f,
     val topSidePadding: Float = 16f,
-    val glassBlur: Float = 10f,
-    val lensHeight: Float = 12f,
-    val lensAmount: Float = 24f,
-    val glassAlpha: Float = 0.38f,
-    val highlightAlpha: Float = 0.95f,
-    val shadowAlpha: Float = 0.12f,
-    val innerShadowAlpha: Float = 0.18f
+    val glassBlur: Float = 4f,
+    val lensHeight: Float = 6f,
+    val lensAmount: Float = 10f,
+    val glassAlpha: Float = 0.30f,
+    val highlightAlpha: Float = 0.65f,
+    val shadowAlpha: Float = 0.07f,
+    val innerShadowAlpha: Float = 0.06f
 )
 
 @Composable
@@ -128,25 +124,7 @@ private fun VanillaApp() {
         )
     }
 
-    val drawerProgress by animateFloatAsState(
-        targetValue = if (drawerOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 420),
-        label = "drawerProgress"
-    )
-    val settingsProgress by animateFloatAsState(
-        targetValue = if (settingsOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 360),
-        label = "settingsProgress"
-    )
-
-    val density = LocalDensity.current
-    val chatOffsetPx = with(density) {
-        (glassSettings.drawerWidth.dp.toPx() * drawerProgress).roundToInt()
-    }
-    val drawerOffsetPx = with(density) {
-        (-(1f - drawerProgress) * glassSettings.drawerWidth.dp.toPx()).roundToInt()
-    }
-
+    val chatOffsetPx = 0
     val backdrop = rememberLayerBackdrop()
 
     Box(Modifier.fillMaxSize()) {
@@ -156,25 +134,12 @@ private fun VanillaApp() {
                 .layerBackdrop(backdrop)
         ) {
             BackgroundScene()
-            DrawerScene(
-                settings = glassSettings,
-                drawerOffsetPx = drawerOffsetPx
-            )
             ChatScene(
                 messages = messages,
                 settings = glassSettings,
                 chatOffsetPx = chatOffsetPx
             )
         }
-
-        DrawerSettingsButton(
-            backdrop = backdrop,
-            settings = glassSettings,
-            drawerProgress = drawerProgress,
-            drawerOffsetPx = drawerOffsetPx,
-            onClick = { settingsOpen = true }
-        )
-
         ChatTopBar(
             backdrop = backdrop,
             settings = glassSettings,
@@ -198,12 +163,16 @@ private fun VanillaApp() {
                 }
             }
         )
+        DrawerScene(
+            settings = glassSettings,
+            visible = drawerOpen,
+            onDismiss = { drawerOpen = false },
+            onSettingsClick = { settingsOpen = true }
+        )
 
         SettingsSheetOverlay(
-            backdrop = backdrop,
             settings = glassSettings,
-            progress = settingsProgress,
-            visible = settingsOpen || settingsProgress > 0.01f,
+            visible = settingsOpen,
             onDismiss = { settingsOpen = false },
             onSettingsChange = { glassSettings = it }
         )
@@ -264,42 +233,66 @@ private fun DrawScope.drawGlassLines() {
 }
 
 @Composable
-private fun DrawerScene(settings: GlassSettings, drawerOffsetPx: Int) {
+private fun DrawerScene(
+    settings: GlassSettings,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    if (!visible) return
+
     Box(
         Modifier
-            .offset { IntOffset(drawerOffsetPx, 0) }
-            .width(settings.drawerWidth.dp)
-            .fillMaxHeight()
-            .background(Color.White.copy(alpha = 0.30f))
-            .padding(horizontal = 22.dp)
+            .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
+            .padding(horizontal = (settings.topSidePadding + 6f).dp)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(top = 24.dp, bottom = 112.dp),
+                .navigationBarsPadding()
+                .padding(top = 22.dp, bottom = 22.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            BasicText(
-                text = "A界面",
-                style = TextStyle(
-                    color = Color(0xFF1F2937),
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                BasicText(
+                    text = "A界面",
+                    style = TextStyle(
+                        color = Color(0xFF1F2937),
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 )
-            )
+                PlainRoundButton(text = "×", onClick = onDismiss)
+            }
+
             BasicText(
-                text = "这里是从左侧推拉出的页面。底部设置按钮会推出样式参数页面。",
+                text = "这里是普通全屏页面，不使用液态玻璃、不使用模糊。",
                 style = TextStyle(
                     color = Color(0xFF344054).copy(alpha = 0.78f),
                     fontSize = 15.sp,
                     lineHeight = 22.sp
                 )
             )
+
             DrawerItem("聊天历史")
             DrawerItem("置顶联系人")
             DrawerItem("收藏气泡")
             DrawerItem("本地草稿")
+
+            Spacer(Modifier.weight(1f))
+
+            PlainTextButton("设置") {
+                onSettingsClick()
+            }
+            PlainTextButton("返回聊天") {
+                onDismiss()
+            }
         }
     }
 }
@@ -310,7 +303,7 @@ private fun DrawerItem(text: String) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(Color.White.copy(alpha = 0.28f))
+            .background(Color.White)
             .padding(horizontal = 18.dp, vertical = 15.dp)
     ) {
         BasicText(
@@ -531,90 +524,26 @@ private fun BoxScope.ChatInputBar(
     }
 }
 
-@Composable
-private fun DrawerSettingsButton(
-    backdrop: Backdrop,
-    settings: GlassSettings,
-    drawerProgress: Float,
-    drawerOffsetPx: Int,
-    onClick: () -> Unit
-) {
-    if (drawerProgress <= 0.01f) return
-
-    Box(
-        Modifier
-            .offset { IntOffset(drawerOffsetPx, 0) }
-            .fillMaxSize()
-            .graphicsLayer { alpha = drawerProgress }
-    ) {
-        GlassSurface(
-            backdrop = backdrop,
-            settings = settings,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .navigationBarsPadding()
-                .padding(start = 24.dp, bottom = 26.dp)
-                .size(58.dp),
-            shape = Capsule(),
-            onClick = onClick
-        ) {
-            BasicText(
-                text = "⚙",
-                style = TextStyle(
-                    color = Color(0xFF202838),
-                    fontSize = 25.sp,
-                    textAlign = TextAlign.Center
-                )
-            )
-        }
-    }
-}
 
 @Composable
 private fun SettingsSheetOverlay(
-    backdrop: Backdrop,
     settings: GlassSettings,
-    progress: Float,
     visible: Boolean,
     onDismiss: () -> Unit,
     onSettingsChange: (GlassSettings) -> Unit
 ) {
     if (!visible) return
 
-    val density = LocalDensity.current
-    val sheetOffsetPx = with(density) {
-        ((1f - progress) * settings.settingsSheetWidth.dp.toPx()).roundToInt()
-    }
-    val interactionSource = remember { MutableInteractionSource() }
-
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.12f * progress))
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = onDismiss
-                )
-        )
-
-        GlassSurface(
-            backdrop = backdrop,
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
+    ) {
+        SettingsPanel(
             settings = settings,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .offset { IntOffset(sheetOffsetPx, 0) }
-                .width(settings.settingsSheetWidth.dp)
-                .fillMaxHeight(),
-            shape = RoundedCornerShape(topStart = 34.dp, bottomStart = 34.dp)
-        ) {
-            SettingsPanel(
-                settings = settings,
-                onDismiss = onDismiss,
-                onSettingsChange = onSettingsChange
-            )
-        }
+            onDismiss = onDismiss,
+            onSettingsChange = onSettingsChange
+        )
     }
 }
 
@@ -648,7 +577,7 @@ private fun SettingsPanel(
                     )
                 )
                 BasicText(
-                    text = "UI尺寸 / Liquid Glass 参数",
+                    text = "UI尺寸 / 玻璃参数（仅聊天页）",
                     style = TextStyle(
                         color = Color(0xFF5C667A),
                         fontSize = 13.sp
@@ -673,12 +602,6 @@ private fun SettingsPanel(
         }
         ParamSlider("输入框高度", settings.inputHeight, 52f..82f, "dp") {
             onSettingsChange(settings.copy(inputHeight = it))
-        }
-        ParamSlider("A界面宽度", settings.drawerWidth, 260f..380f, "dp") {
-            onSettingsChange(settings.copy(drawerWidth = it))
-        }
-        ParamSlider("设置页宽度", settings.settingsSheetWidth, 300f..420f, "dp") {
-            onSettingsChange(settings.copy(settingsSheetWidth = it))
         }
 
         SettingsGroupTitle("液态玻璃")
@@ -838,26 +761,27 @@ private fun GlassSurface(
                 backdrop = backdrop,
                 shape = { shape },
                 effects = {
-                    vibrancy()
                     blur(settings.glassBlur.dp.toPx())
-                    lens(
-                        refractionHeight = settings.lensHeight.dp.toPx(),
-                        refractionAmount = settings.lensAmount.dp.toPx(),
-                        chromaticAberration = true
-                    )
+                    if (settings.lensHeight > 0f && settings.lensAmount > 0f) {
+                        lens(
+                            refractionHeight = settings.lensHeight.dp.toPx(),
+                            refractionAmount = settings.lensAmount.dp.toPx(),
+                            chromaticAberration = false
+                        )
+                    }
                 },
                 highlight = {
                     Highlight.Ambient.copy(alpha = settings.highlightAlpha)
                 },
                 shadow = {
                     Shadow(
-                        radius = 18.dp,
+                        radius = 8.dp,
                         color = Color.Black.copy(alpha = settings.shadowAlpha)
                     )
                 },
                 innerShadow = {
                     InnerShadow(
-                        radius = 18.dp,
+                        radius = 6.dp,
                         color = Color.Black.copy(alpha = settings.innerShadowAlpha),
                         alpha = settings.innerShadowAlpha
                     )
