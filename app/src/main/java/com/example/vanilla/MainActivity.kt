@@ -16,6 +16,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -297,42 +301,45 @@ private fun VanillaApp() {
     var glassSettings by remember { mutableStateOf(GlassSettings()) }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var assistantDetailOpen by remember { mutableStateOf(false) }
     var apiDetailOpen by remember { mutableStateOf(false) }
     var glassDetailOpen by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     var nextMessageId by remember { mutableIntStateOf(3) }
     var inputBarHeightPx by remember { mutableIntStateOf(92) }
 
-    val messages = remember {
-        mutableStateListOf(
-            ChatMessage(1, "你好，我是 friend。", fromMe = false),
-            ChatMessage(2, "这个界面已经接入液态玻璃组件。", fromMe = false)
-        )
-    }
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val sessions = remember { mutableStateListOf<String>() }
 
     BackHandler(enabled = glassDetailOpen) { glassDetailOpen = false }
     BackHandler(enabled = apiDetailOpen) { apiDetailOpen = false }
-    BackHandler(enabled = settingsOpen && !apiDetailOpen && !glassDetailOpen) { settingsOpen = false }
-    BackHandler(enabled = drawerOpen && !settingsOpen && !apiDetailOpen && !glassDetailOpen) { drawerOpen = false }
+    BackHandler(enabled = assistantDetailOpen) { assistantDetailOpen = false }
+    BackHandler(enabled = settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) { settingsOpen = false }
+    BackHandler(enabled = drawerOpen && !settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) { drawerOpen = false }
 
     val drawerProgress by animateFloatAsState(
         targetValue = if (drawerOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 420),
+        animationSpec = tween(durationMillis = 260),
         label = "drawerProgress"
     )
     val settingsProgress by animateFloatAsState(
         targetValue = if (settingsOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 380),
+        animationSpec = tween(durationMillis = 240),
         label = "settingsProgress"
+    )
+    val assistantProgress by animateFloatAsState(
+        targetValue = if (assistantDetailOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 230),
+        label = "assistantProgress"
     )
     val apiProgress by animateFloatAsState(
         targetValue = if (apiDetailOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 360),
+        animationSpec = tween(durationMillis = 230),
         label = "apiProgress"
     )
     val detailProgress by animateFloatAsState(
         targetValue = if (glassDetailOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 360),
+        animationSpec = tween(durationMillis = 230),
         label = "detailProgress"
     )
 
@@ -342,9 +349,10 @@ private fun VanillaApp() {
         val chatOffsetPx = (screenWidthPx * drawerProgress).roundToInt()
         val drawerOffsetPx = (screenWidthPx * (drawerProgress - 1f)).roundToInt()
         val settingsOffsetPx = (screenWidthPx * (1f - settingsProgress)).roundToInt()
+        val assistantDetailOffsetPx = (screenWidthPx * (1f - assistantProgress)).roundToInt()
         val apiDetailOffsetPx = (screenWidthPx * (1f - apiProgress)).roundToInt()
         val detailOffsetPx = (screenWidthPx * (1f - detailProgress)).roundToInt()
-        val settingsPushProgress = maxOf(apiProgress, detailProgress)
+        val settingsPushProgress = maxOf(assistantProgress, apiProgress, detailProgress)
         val detailUnderOffsetPx = (screenWidthPx * -0.18f * settingsPushProgress).roundToInt()
         val inputBottomPadding = with(density) { inputBarHeightPx.toDp() + 26.dp }
         val backdrop = rememberLayerBackdrop()
@@ -362,14 +370,24 @@ private fun VanillaApp() {
             )
 
             if (drawerProgress > 0.001f) {
-                DrawerScene(drawerOffsetPx = drawerOffsetPx)
+                DrawerScene(
+                    drawerOffsetPx = drawerOffsetPx,
+                    sessions = sessions
+                )
             }
 
             if (settingsProgress > 0.001f) {
                 SettingsHomeScene(
                     offsetPx = settingsOffsetPx + detailUnderOffsetPx,
+                    onOpenAssistantSettings = { assistantDetailOpen = true },
                     onOpenApiSettings = { apiDetailOpen = true },
                     onOpenGlassSettings = { glassDetailOpen = true }
+                )
+            }
+
+            if (assistantProgress > 0.001f) {
+                AssistantSettingsScene(
+                    offsetPx = assistantDetailOffsetPx
                 )
             }
 
@@ -393,7 +411,15 @@ private fun VanillaApp() {
             settings = glassSettings,
             chatOffsetPx = chatOffsetPx,
             onMenuClick = { drawerOpen = true },
-            onAddClick = { }
+            onAddClick = {
+                val firstText = messages.firstOrNull()?.text?.trim().orEmpty()
+                if (firstText.isNotEmpty()) {
+                    sessions.add(firstText.replace("
+", " ").take(32))
+                    messages.clear()
+                    inputText = ""
+                }
+            }
         )
 
         ChatInputBar(
@@ -461,50 +487,92 @@ private fun DrawScope.drawGlassLines() {
 }
 
 @Composable
-private fun DrawerScene(drawerOffsetPx: Int) {
+private fun DrawerScene(
+    drawerOffsetPx: Int,
+    sessions: List<String>
+) {
     Box(
         Modifier
             .offset { IntOffset(drawerOffsetPx, 0) }
             .fillMaxSize()
             .background(Color(0xFFF7F8FC))
-            .padding(horizontal = 22.dp)
+            .padding(horizontal = 28.dp)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(top = 26.dp, bottom = 112.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(top = 34.dp, bottom = 112.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.Start
         ) {
             BasicText(
-                text = "A界面",
-                style = TextStyle(Color(0xFF1F2937), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                text = "会话",
+                modifier = Modifier.padding(start = 2.dp),
+                style = TextStyle(
+                    color = Color(0xFF1F2937),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
             )
-            BasicText(
-                text = "从左侧推出并占满屏幕。使用系统边缘返回手势回到聊天界面。",
-                style = TextStyle(Color(0xFF344054).copy(alpha = 0.78f), fontSize = 15.sp, lineHeight = 22.sp)
-            )
-            DrawerItem("聊天历史")
-            DrawerItem("置顶联系人")
-            DrawerItem("收藏气泡")
-            DrawerItem("本地草稿")
+
+            Spacer(Modifier.height(16.dp))
+
+            if (sessions.isEmpty()) {
+                BasicText(
+                    text = "暂无会话",
+                    modifier = Modifier.padding(start = 2.dp),
+                    style = TextStyle(
+                        color = Color(0xFF667085),
+                        fontSize = 15.sp
+                    )
+                )
+            } else {
+                sessions.forEach { title ->
+                    DrawerItem(title)
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun DrawerItem(text: String) {
+    var showLongPressShape by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showLongPressShape) {
+        if (showLongPressShape) {
+            delay(520)
+            showLongPressShape = false
+        }
+    }
+
     Box(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(Color.White)
-            .padding(horizontal = 18.dp, vertical = 15.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (showLongPressShape) {
+                    Color.White.copy(alpha = 0.78f)
+                } else {
+                    Color.Transparent
+                }
+            )
+            .pointerInput(text) {
+                detectTapGestures(
+                    onLongPress = { showLongPressShape = true }
+                )
+            }
+            .padding(start = 8.dp, end = 8.dp, top = 13.dp, bottom = 13.dp)
     ) {
         BasicText(
             text = text,
-            style = TextStyle(Color(0xFF263344), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         )
     }
 }
@@ -525,7 +593,22 @@ private fun ChatScene(
             contentPadding = PaddingValues(top = 122.dp, bottom = bottomPadding, start = 16.dp, end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(messages, key = { it.id }) { message -> MessageBubble(message) }
+            items(messages, key = { it.id }) { message ->
+            AnimatedVisibility(
+                visible = true,
+                enter = fadeIn(animationSpec = tween(150)) +
+                    slideInVertically(
+                        animationSpec = tween(170),
+                        initialOffsetY = { it / 3 }
+                    ) +
+                    scaleIn(
+                        animationSpec = tween(170),
+                        initialScale = 0.96f
+                    )
+            ) {
+                MessageBubble(message)
+            }
+        }
         }
     }
 }
@@ -548,7 +631,7 @@ private fun MessageBubble(message: ChatMessage) {
                     )
                 )
                 .background(if (message.fromMe) Color(0xFF4A7DFF) else Color.White)
-                .padding(horizontal = 15.dp, vertical = 11.dp)
+                .padding(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 10.dp)
         ) {
             BasicText(
                 text = message.text,
@@ -586,18 +669,22 @@ private fun ChatTopBar(
         GlassSurface(
             backdrop = backdrop,
             settings = settings,
-            modifier = Modifier.align(Alignment.Center).width(116.dp).height(50.dp),
+            modifier = Modifier.align(Alignment.Center).width(108.dp).height(50.dp),
             shape = Capsule()
         ) {
             Row(
-                Modifier.fillMaxSize().padding(start = 7.dp, end = 7.dp),
+                Modifier.fillMaxSize().padding(start = 7.dp, end = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFF687BFF)))
                 BasicText(
                     text = "friend",
-                    style = TextStyle(Color(0xFF202838), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    style = TextStyle(
+                        color = Color(0xFF202838),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Normal
+                    )
                 )
             }
         }
@@ -723,6 +810,7 @@ private fun DrawerSettingsButton(
 @Composable
 private fun SettingsHomeScene(
     offsetPx: Int,
+    onOpenAssistantSettings: () -> Unit,
     onOpenApiSettings: () -> Unit,
     onOpenGlassSettings: () -> Unit
 ) {
@@ -731,19 +819,20 @@ private fun SettingsHomeScene(
             .offset { IntOffset(offsetPx, 0) }
             .fillMaxSize()
             .background(Color(0xFFF7F8FC))
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 28.dp)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(top = 28.dp, bottom = 24.dp),
+                .padding(top = 34.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.Start
         ) {
             BasicText(
                 text = "设置",
+                modifier = Modifier.padding(start = 2.dp),
                 style = TextStyle(
                     color = Color(0xFF1F2937),
                     fontSize = 28.sp,
@@ -752,6 +841,12 @@ private fun SettingsHomeScene(
             )
 
             Spacer(Modifier.height(16.dp))
+
+            SettingsListItem(
+                title = "AI 助手设定",
+                subtitle = "头像、名字、提示词和聊天背景",
+                onClick = onOpenAssistantSettings
+            )
 
             SettingsListItem(
                 title = "API 提供商设置",
@@ -825,6 +920,257 @@ private fun SettingsListItem(
 }
 
 @Composable
+private fun AssistantSettingsScene(offsetPx: Int) {
+    var assistantName by remember { mutableStateOf("friend") }
+    var prompt by remember { mutableStateOf("") }
+    var backgroundName by remember { mutableStateOf("") }
+    var backgroundBlur by remember { mutableStateOf(0f) }
+    var backgroundDim by remember { mutableStateOf(0.15f) }
+
+    Column(
+        Modifier
+            .offset { IntOffset(offsetPx, 0) }
+            .fillMaxSize()
+            .background(Color(0xFFF7F8FC))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 28.dp, vertical = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        BasicText(
+            text = "AI 助手",
+            modifier = Modifier.padding(start = 2.dp),
+            style = TextStyle(
+                color = Color(0xFF1F2937),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(58.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Color(0xFF687BFF),
+                                Color(0xFFFF8DB3)
+                            )
+                        )
+                    )
+            )
+
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                BasicText(
+                    text = "助手名字",
+                    style = TextStyle(
+                        color = Color(0xFF202838),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+
+                BasicTextField(
+                    value = assistantName,
+                    onValueChange = { assistantName = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.62f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color(0xFF162033),
+                        fontSize = 15.sp
+                    ),
+                    cursorBrush = SolidColor(Color(0xFF4A7DFF))
+                )
+            }
+        }
+
+        AssistantMultilineField(
+            label = "提示词设定",
+            value = prompt,
+            placeholder = "例如：你是一个简洁、温柔、直接的 AI 助手。",
+            onValueChange = { prompt = it }
+        )
+
+        BackgroundPickerMock(
+            value = backgroundName,
+            onValueChange = { backgroundName = it }
+        )
+
+        ParamSlider("聊天背景模糊度", backgroundBlur, 0f..30f, "px") {
+            backgroundBlur = it
+        }
+
+        ParamSlider("聊天背景明暗度", backgroundDim, 0f..0.75f, "%") {
+            backgroundDim = it
+        }
+
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun AssistantMultilineField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        BasicText(
+            text = label,
+            modifier = Modifier.padding(start = 2.dp),
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 132.dp, max = 220.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.White.copy(alpha = 0.62f))
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 15.dp),
+            textStyle = TextStyle(
+                color = Color(0xFF162033),
+                fontSize = 15.sp,
+                lineHeight = 22.sp
+            ),
+            cursorBrush = SolidColor(Color(0xFF4A7DFF)),
+            decorationBox = { innerTextField ->
+                Box {
+                    if (value.isEmpty()) {
+                        BasicText(
+                            text = placeholder,
+                            style = TextStyle(
+                                color = Color(0xFF667085).copy(alpha = 0.62f),
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp
+                            )
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun BackgroundPickerMock(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        BasicText(
+            text = "聊天背景设定",
+            modifier = Modifier.padding(start = 2.dp),
+            style = TextStyle(
+                color = Color(0xFF202838),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color.White.copy(alpha = 0.62f))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(138.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Color(0xFFEAF2FF),
+                                Color(0xFFFFEDF7),
+                                Color(0xFFEFFFF8)
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                BasicText(
+                    text = "自动裁切为全屏显示",
+                    style = TextStyle(
+                        color = Color(0xFF202838).copy(alpha = 0.72f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+            }
+
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = Color(0xFF162033),
+                    fontSize = 14.sp
+                ),
+                cursorBrush = SolidColor(Color(0xFF4A7DFF)),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) {
+                            BasicText(
+                                text = "背景图片名称 / 路径占位",
+                                style = TextStyle(
+                                    color = Color(0xFF667085).copy(alpha = 0.62f),
+                                    fontSize = 14.sp
+                                )
+                            )
+                        }
+                        innerTextField()
+                    }
+                }
+            )
+        }
+    }
+}
+
+
+@Composable
 private fun ApiProviderSettingsScene(offsetPx: Int) {
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
@@ -838,12 +1184,13 @@ private fun ApiProviderSettingsScene(offsetPx: Int) {
             .statusBarsPadding()
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 28.dp),
+            .padding(horizontal = 28.dp, vertical = 34.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
         horizontalAlignment = Alignment.Start
     ) {
         BasicText(
             text = "API 提供商",
+            modifier = Modifier.padding(start = 2.dp),
             style = TextStyle(
                 color = Color(0xFF1F2937),
                 fontSize = 28.sp,
@@ -943,11 +1290,12 @@ private fun GlassStyleSettingsScene(
             .statusBarsPadding()
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 22.dp, vertical = 24.dp),
+            .padding(horizontal = 28.dp, vertical = 34.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         BasicText(
             text = "液态玻璃样式",
+            modifier = Modifier.padding(start = 2.dp),
             style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
         )
         BasicText(
