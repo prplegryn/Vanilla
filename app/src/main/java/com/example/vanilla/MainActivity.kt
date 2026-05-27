@@ -1,6 +1,16 @@
 package com.example.vanilla
 
 import android.os.Bundle
+import kotlin.system.exitProcess
+import java.util.Locale
+import java.util.Date
+import java.text.SimpleDateFormat
+import java.io.StringWriter
+import java.io.PrintWriter
+import android.widget.Toast
+import android.content.Context
+import android.content.ClipboardManager
+import android.content.ClipData
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -86,11 +96,179 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installCrashLogger()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { VanillaApp() }
+
+        setContent {
+            var crashReport by remember {
+                mutableStateOf(
+                    getSharedPreferences("crash_report", MODE_PRIVATE)
+                        .getString("last_crash", null)
+                )
+            }
+
+            if (crashReport != null) {
+                CrashReportScreen(
+                    report = crashReport.orEmpty(),
+                    onClear = {
+                        getSharedPreferences("crash_report", MODE_PRIVATE)
+                            .edit()
+                            .remove("last_crash")
+                            .apply()
+                        crashReport = null
+                    }
+                )
+            } else {
+                VanillaApp()
+            }
+        }
+    }
+
+    private fun installCrashLogger() {
+        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
+
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                val writer = StringWriter()
+                throwable.printStackTrace(PrintWriter(writer))
+
+                val time = SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss",
+                    Locale.getDefault()
+                ).format(Date())
+
+                val report = buildString {
+                    appendLine("Vanilla crash report")
+                    appendLine("Time: $time")
+                    appendLine("Thread: ${thread.name}")
+                    appendLine()
+                    appendLine(writer.toString())
+                }
+
+                getSharedPreferences("crash_report", MODE_PRIVATE)
+                    .edit()
+                    .putString("last_crash", report)
+                    .commit()
+            }
+
+            if (oldHandler != null) {
+                oldHandler.uncaughtException(thread, throwable)
+            } else {
+                exitProcess(2)
+            }
+        }
     }
 }
+
+@Composable
+private fun CrashReportScreen(
+    report: String,
+    onClear: () -> Unit
+) {
+    val context = LocalContext.current
+    val scrollState = rememberScrollState()
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF101828))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        BasicText(
+            text = "捕获到上次闪退日志",
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+
+        BasicText(
+            text = "点复制日志，然后把内容发给我。清除后会进入 app。",
+            style = TextStyle(
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
+        )
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CrashButton(
+                text = "复制日志",
+                modifier = Modifier.weight(1f)
+            ) {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("Vanilla crash report", report)
+                )
+                Toast.makeText(context, "已复制日志", Toast.LENGTH_SHORT).show()
+            }
+
+            CrashButton(
+                text = "清除",
+                modifier = Modifier.weight(1f),
+                onClick = onClear
+            )
+        }
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.Black.copy(alpha = 0.26f))
+                .verticalScroll(scrollState)
+                .padding(14.dp)
+        ) {
+            BasicText(
+                text = report,
+                style = TextStyle(
+                    color = Color.White.copy(alpha = 0.88f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun CrashButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Box(
+        modifier
+            .height(46.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.14f))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        BasicText(
+            text = text,
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+        )
+    }
+}
+
 
 private data class ChatMessage(
     val id: Int,
@@ -181,7 +359,6 @@ private fun VanillaApp() {
 
             if (detailProgress > 0.001f) {
                 GlassStyleSettingsScene(
-                    backdrop = backdrop,
                     settings = glassSettings,
                     offsetPx = detailOffsetPx,
                     onSettingsUpdate = { update -> glassSettings = update(glassSettings) }
@@ -577,7 +754,6 @@ private fun SettingsListItem(title: String, subtitle: String, onClick: () -> Uni
 
 @Composable
 private fun GlassStyleSettingsScene(
-    backdrop: Backdrop,
     settings: GlassSettings,
     offsetPx: Int,
     onSettingsUpdate: ((GlassSettings) -> GlassSettings) -> Unit
@@ -602,7 +778,7 @@ private fun GlassStyleSettingsScene(
             style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 20.sp)
         )
 
-        GlassPreviewCard(backdrop = backdrop, settings = settings)
+        GlassPreviewCard(settings = settings)
 
         SettingsGroupTitle("液态玻璃")
         ParamSlider("背景模糊", settings.glassBlur, 0f..24f, "px") {
@@ -635,7 +811,9 @@ private fun GlassStyleSettingsScene(
 }
 
 @Composable
-private fun GlassPreviewCard(backdrop: Backdrop, settings: GlassSettings) {
+private fun GlassPreviewCard(settings: GlassSettings) {
+    val previewBackdrop = rememberLayerBackdrop()
+
     Box(
         Modifier
             .fillMaxWidth()
@@ -643,14 +821,21 @@ private fun GlassPreviewCard(backdrop: Backdrop, settings: GlassSettings) {
             .clip(RoundedCornerShape(32.dp))
             .background(Color(0xFFE8ECF7))
     ) {
-        Image(
-            painter = painterResource(id = R.drawable.glass_preview),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .layerBackdrop(previewBackdrop)
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.glass_preview),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
         GlassSurface(
-            backdrop = backdrop,
+            backdrop = previewBackdrop,
             settings = settings,
             modifier = Modifier
                 .align(Alignment.Center)
@@ -660,7 +845,11 @@ private fun GlassPreviewCard(backdrop: Backdrop, settings: GlassSettings) {
         ) {
             BasicText(
                 text = "Glass Preview",
-                style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                style = TextStyle(
+                    color = Color(0xFF202838),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
             )
         }
     }
