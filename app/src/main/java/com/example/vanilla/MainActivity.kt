@@ -414,8 +414,8 @@ private fun VanillaApp() {
             onAddClick = {
                 val firstText = messages.firstOrNull()?.text?.trim().orEmpty()
                 if (firstText.isNotEmpty()) {
-                    sessions.add(firstText.replace("
-", " ").take(32))
+                    sessions.add(firstText.replace('
+', ' ').take(32))
                     messages.clear()
                     inputText = ""
                 }
