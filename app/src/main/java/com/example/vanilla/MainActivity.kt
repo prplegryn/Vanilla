@@ -1,21 +1,18 @@
 package com.example.vanilla
 
+import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
-import kotlin.system.exitProcess
-import java.util.Locale
-import java.util.Date
-import java.text.SimpleDateFormat
-import java.io.StringWriter
-import java.io.PrintWriter
 import android.widget.Toast
-import android.content.Context
-import android.content.ClipboardManager
-import android.content.ClipData
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
@@ -26,9 +23,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -67,9 +61,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur as composeBlur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -77,13 +73,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -100,190 +96,30 @@ import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        installCrashLogger()
         enableEdgeToEdge()
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         super.onCreate(savedInstanceState)
-
-        setContent {
-            var crashReport by remember {
-                mutableStateOf(
-                    getSharedPreferences("crash_report", MODE_PRIVATE)
-                        .getString("last_crash", null)
-                )
-            }
-
-            if (crashReport != null) {
-                CrashReportScreen(
-                    report = crashReport.orEmpty(),
-                    onClear = {
-                        getSharedPreferences("crash_report", MODE_PRIVATE)
-                            .edit()
-                            .remove("last_crash")
-                            .apply()
-                        crashReport = null
-                    }
-                )
-            } else {
-                VanillaApp()
-            }
-        }
-    }
-
-    private fun installCrashLogger() {
-        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
-
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            runCatching {
-                val writer = StringWriter()
-                throwable.printStackTrace(PrintWriter(writer))
-
-                val time = SimpleDateFormat(
-                    "yyyy-MM-dd HH:mm:ss",
-                    Locale.getDefault()
-                ).format(Date())
-
-                val report = buildString {
-                    appendLine("Vanilla crash report")
-                    appendLine("Time: $time")
-                    appendLine("Thread: ${thread.name}")
-                    appendLine()
-                    appendLine(writer.toString())
-                }
-
-                getSharedPreferences("crash_report", MODE_PRIVATE)
-                    .edit()
-                    .putString("last_crash", report)
-                    .commit()
-            }
-
-            if (oldHandler != null) {
-                oldHandler.uncaughtException(thread, throwable)
-            } else {
-                exitProcess(2)
-            }
-        }
+        setContent { VanillaApp() }
     }
 }
-
-@Composable
-private fun CrashReportScreen(
-    report: String,
-    onClear: () -> Unit
-) {
-    val context = LocalContext.current
-    val scrollState = rememberScrollState()
-
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFF101828))
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        BasicText(
-            text = "捕获到上次闪退日志",
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold
-            )
-        )
-
-        BasicText(
-            text = "点复制日志，然后把内容发给我。清除后会进入 app。",
-            style = TextStyle(
-                color = Color.White.copy(alpha = 0.72f),
-                fontSize = 14.sp,
-                lineHeight = 20.sp
-            )
-        )
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            CrashButton(
-                text = "复制日志",
-                modifier = Modifier.weight(1f)
-            ) {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(
-                    ClipData.newPlainText("Vanilla crash report", report)
-                )
-                Toast.makeText(context, "已复制日志", Toast.LENGTH_SHORT).show()
-            }
-
-            CrashButton(
-                text = "清除",
-                modifier = Modifier.weight(1f),
-                onClick = onClear
-            )
-        }
-
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color.Black.copy(alpha = 0.26f))
-                .verticalScroll(scrollState)
-                .padding(14.dp)
-        ) {
-            BasicText(
-                text = report,
-                style = TextStyle(
-                    color = Color.White.copy(alpha = 0.88f),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
-            )
-        }
-    }
-}
-
-@Composable
-private fun CrashButton(
-    text: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-
-    Box(
-        modifier
-            .height(46.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.14f))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        BasicText(
-            text = text,
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold
-            )
-        )
-    }
-}
-
 
 private data class ChatMessage(
     val id: Int,
     val text: String,
-    val fromMe: Boolean
+    val fromMe: Boolean,
+    val isTyping: Boolean = false
 )
 
 private data class GlassSettings(
@@ -296,52 +132,89 @@ private data class GlassSettings(
     val innerShadowAlpha: Float = 0.06f
 )
 
+private data class AppSettings(
+    val apiBaseUrl: String = "",
+    val apiKey: String = "",
+    val modelName: String = "",
+    val assistantName: String = "friend",
+    val systemPrompt: String = "",
+    val assistantAvatarUri: String = "",
+    val chatBackgroundUri: String = "",
+    val backgroundBlur: Float = 0f,
+    val backgroundDim: Float = 0.15f,
+    val glass: GlassSettings = GlassSettings()
+)
+
 @Composable
 private fun VanillaApp() {
-    var glassSettings by remember { mutableStateOf(GlassSettings()) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var appSettings by remember { mutableStateOf(loadAppSettings(context)) }
+    fun updateSettings(next: AppSettings) {
+        appSettings = next
+        saveAppSettings(context, next)
+    }
+
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var assistantDetailOpen by remember { mutableStateOf(false) }
     var apiDetailOpen by remember { mutableStateOf(false) }
     var glassDetailOpen by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
-    var nextMessageId by remember { mutableIntStateOf(3) }
+    var nextMessageId by remember { mutableIntStateOf(1) }
     var inputBarHeightPx by remember { mutableIntStateOf(92) }
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
-    val sessions = remember { mutableStateListOf<String>() }
+    val sessions = remember {
+        mutableStateListOf<String>().apply { addAll(loadSessions(context)) }
+    }
+
+    LaunchedEffect(sessions.toList()) {
+        saveSessions(context, sessions)
+    }
 
     BackHandler(enabled = glassDetailOpen) { glassDetailOpen = false }
     BackHandler(enabled = apiDetailOpen) { apiDetailOpen = false }
     BackHandler(enabled = assistantDetailOpen) { assistantDetailOpen = false }
-    BackHandler(enabled = settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) { settingsOpen = false }
-    BackHandler(enabled = drawerOpen && !settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) { drawerOpen = false }
+    BackHandler(enabled = settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) {
+        settingsOpen = false
+    }
+    BackHandler(enabled = drawerOpen && !settingsOpen && !assistantDetailOpen && !apiDetailOpen && !glassDetailOpen) {
+        drawerOpen = false
+    }
 
-    val drawerProgress by animateFloatAsState(
-        targetValue = if (drawerOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 260),
-        label = "drawerProgress"
-    )
-    val settingsProgress by animateFloatAsState(
-        targetValue = if (settingsOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 240),
-        label = "settingsProgress"
-    )
-    val assistantProgress by animateFloatAsState(
-        targetValue = if (assistantDetailOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 230),
-        label = "assistantProgress"
-    )
-    val apiProgress by animateFloatAsState(
-        targetValue = if (apiDetailOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 230),
-        label = "apiProgress"
-    )
-    val detailProgress by animateFloatAsState(
-        targetValue = if (glassDetailOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 230),
-        label = "detailProgress"
-    )
+    val drawerProgress by animateFloatAsState(if (drawerOpen) 1f else 0f, tween(230), label = "drawer")
+    val settingsProgress by animateFloatAsState(if (settingsOpen) 1f else 0f, tween(220), label = "settings")
+    val assistantProgress by animateFloatAsState(if (assistantDetailOpen) 1f else 0f, tween(210), label = "assistant")
+    val apiProgress by animateFloatAsState(if (apiDetailOpen) 1f else 0f, tween(210), label = "api")
+    val glassProgress by animateFloatAsState(if (glassDetailOpen) 1f else 0f, tween(210), label = "glass")
+
+    fun sendMessage() {
+        val text = inputText.trim()
+        if (text.isEmpty()) return
+
+        val userMessage = ChatMessage(nextMessageId++, text, fromMe = true)
+        val typingMessage = ChatMessage(nextMessageId++, "", fromMe = false, isTyping = true)
+
+        messages += userMessage
+        messages += typingMessage
+        inputText = ""
+
+        val history = messages.filter { !it.isTyping }
+
+        scope.launch {
+            val reply = requestAiReply(appSettings, history)
+            val cleanReply = stripThinkTags(reply).ifBlank { "我没有收到有效回复。" }
+            val index = messages.indexOfFirst { it.id == typingMessage.id }
+            if (index >= 0) {
+                messages[index] = messages[index].copy(
+                    text = cleanReply,
+                    isTyping = false
+                )
+            }
+        }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -349,11 +222,11 @@ private fun VanillaApp() {
         val chatOffsetPx = (screenWidthPx * drawerProgress).roundToInt()
         val drawerOffsetPx = (screenWidthPx * (drawerProgress - 1f)).roundToInt()
         val settingsOffsetPx = (screenWidthPx * (1f - settingsProgress)).roundToInt()
-        val assistantDetailOffsetPx = (screenWidthPx * (1f - assistantProgress)).roundToInt()
-        val apiDetailOffsetPx = (screenWidthPx * (1f - apiProgress)).roundToInt()
-        val detailOffsetPx = (screenWidthPx * (1f - detailProgress)).roundToInt()
-        val settingsPushProgress = maxOf(assistantProgress, apiProgress, detailProgress)
-        val detailUnderOffsetPx = (screenWidthPx * -0.18f * settingsPushProgress).roundToInt()
+        val assistantOffsetPx = (screenWidthPx * (1f - assistantProgress)).roundToInt()
+        val apiOffsetPx = (screenWidthPx * (1f - apiProgress)).roundToInt()
+        val glassOffsetPx = (screenWidthPx * (1f - glassProgress)).roundToInt()
+        val pushedProgress = maxOf(assistantProgress, apiProgress, glassProgress)
+        val settingsUnderOffsetPx = (screenWidthPx * -0.18f * pushedProgress).roundToInt()
         val inputBottomPadding = with(density) { inputBarHeightPx.toDp() + 26.dp }
         val backdrop = rememberLayerBackdrop()
 
@@ -362,7 +235,8 @@ private fun VanillaApp() {
                 .fillMaxSize()
                 .layerBackdrop(backdrop)
         ) {
-            BackgroundScene()
+            ChatBackgroundScene(appSettings)
+
             ChatScene(
                 messages = messages,
                 chatOffsetPx = chatOffsetPx,
@@ -378,7 +252,7 @@ private fun VanillaApp() {
 
             if (settingsProgress > 0.001f) {
                 SettingsHomeScene(
-                    offsetPx = settingsOffsetPx + detailUnderOffsetPx,
+                    offsetPx = settingsOffsetPx + settingsUnderOffsetPx,
                     onOpenAssistantSettings = { assistantDetailOpen = true },
                     onOpenApiSettings = { apiDetailOpen = true },
                     onOpenGlassSettings = { glassDetailOpen = true }
@@ -387,37 +261,40 @@ private fun VanillaApp() {
 
             if (assistantProgress > 0.001f) {
                 AssistantSettingsScene(
-                    offsetPx = assistantDetailOffsetPx
+                    settings = appSettings,
+                    offsetPx = assistantOffsetPx,
+                    onSettingsChange = ::updateSettings
                 )
             }
 
             if (apiProgress > 0.001f) {
                 ApiProviderSettingsScene(
-                    offsetPx = apiDetailOffsetPx
+                    settings = appSettings,
+                    offsetPx = apiOffsetPx,
+                    onSettingsChange = ::updateSettings
                 )
             }
 
-            if (detailProgress > 0.001f) {
+            if (glassProgress > 0.001f) {
                 GlassStyleSettingsScene(
-                    settings = glassSettings,
-                    offsetPx = detailOffsetPx,
-                    onSettingsUpdate = { update -> glassSettings = update(glassSettings) }
+                    settings = appSettings.glass,
+                    offsetPx = glassOffsetPx,
+                    onSettingsUpdate = { update ->
+                        updateSettings(appSettings.copy(glass = update(appSettings.glass)))
+                    }
                 )
             }
         }
 
         ChatTopBar(
             backdrop = backdrop,
-            settings = glassSettings,
+            settings = appSettings,
             chatOffsetPx = chatOffsetPx,
             onMenuClick = { drawerOpen = true },
             onAddClick = {
-                val firstText = messages.firstOrNull()?.text?.trim().orEmpty()
+                val firstText = messages.firstOrNull { !it.isTyping }?.text?.trim().orEmpty()
                 if (firstText.isNotEmpty()) {
-                    val title = firstText
-                        .replace("\\n", " ")
-                        .replace("\\r", " ")
-                        .take(32)
+                    val title = firstText.replace("\n", " ").replace("\r", " ").take(32)
                     sessions.add(title)
                     messages.clear()
                     inputText = ""
@@ -427,25 +304,18 @@ private fun VanillaApp() {
 
         ChatInputBar(
             backdrop = backdrop,
-            settings = glassSettings,
+            glass = appSettings.glass,
             chatOffsetPx = chatOffsetPx,
             value = inputText,
             onValueChange = { inputText = it },
             onHeightChanged = { inputBarHeightPx = it },
-            onSend = {
-                val text = inputText.trim()
-                if (text.isNotEmpty()) {
-                    messages += ChatMessage(nextMessageId, text, fromMe = true)
-                    nextMessageId += 1
-                    inputText = ""
-                }
-            }
+            onSend = ::sendMessage
         )
 
         if (drawerProgress > 0.001f && !settingsOpen) {
             DrawerSettingsButton(
                 backdrop = backdrop,
-                settings = glassSettings,
+                glass = appSettings.glass,
                 drawerOffsetPx = drawerOffsetPx,
                 alpha = drawerProgress,
                 onClick = { settingsOpen = true }
@@ -455,19 +325,42 @@ private fun VanillaApp() {
 }
 
 @Composable
-private fun BackgroundScene() {
+private fun ChatBackgroundScene(settings: AppSettings) {
+    Box(Modifier.fillMaxSize()) {
+        if (settings.chatBackgroundUri.isNotBlank()) {
+            UriImage(
+                uriString = settings.chatBackgroundUri,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .composeBlur(settings.backgroundBlur.dp),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            DefaultBackground()
+        }
+
+        if (settings.backgroundDim > 0f) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = settings.backgroundDim.coerceIn(0f, 0.85f)))
+            )
+        }
+    }
+}
+
+@Composable
+private fun DefaultBackground() {
     Box(
         Modifier
             .fillMaxSize()
             .background(
                 Brush.linearGradient(
-                    colors = listOf(
+                    listOf(
                         Color(0xFFFFF8F1),
                         Color(0xFFEAF2FF),
                         Color(0xFFFFEDF7)
-                    ),
-                    start = Offset.Zero,
-                    end = Offset(1400f, 2200f)
+                    )
                 )
             )
     ) {
@@ -513,11 +406,7 @@ private fun DrawerScene(
             BasicText(
                 text = "会话",
                 modifier = Modifier.padding(start = 2.dp),
-                style = TextStyle(
-                    color = Color(0xFF1F2937),
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
             )
 
             Spacer(Modifier.height(16.dp))
@@ -526,15 +415,10 @@ private fun DrawerScene(
                 BasicText(
                     text = "暂无会话",
                     modifier = Modifier.padding(start = 2.dp),
-                    style = TextStyle(
-                        color = Color(0xFF667085),
-                        fontSize = 15.sp
-                    )
+                    style = TextStyle(Color(0xFF667085), fontSize = 15.sp)
                 )
             } else {
-                sessions.forEach { title ->
-                    DrawerItem(title)
-                }
+                sessions.forEach { DrawerItem(it) }
             }
         }
     }
@@ -542,12 +426,12 @@ private fun DrawerScene(
 
 @Composable
 private fun DrawerItem(text: String) {
-    var showLongPressShape by remember { mutableStateOf(false) }
+    var showShape by remember { mutableStateOf(false) }
 
-    LaunchedEffect(showLongPressShape) {
-        if (showLongPressShape) {
+    LaunchedEffect(showShape) {
+        if (showShape) {
             delay(520)
-            showLongPressShape = false
+            showShape = false
         }
     }
 
@@ -555,27 +439,15 @@ private fun DrawerItem(text: String) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                if (showLongPressShape) {
-                    Color.White.copy(alpha = 0.78f)
-                } else {
-                    Color.Transparent
-                }
-            )
+            .background(if (showShape) Color.White.copy(alpha = 0.78f) else Color.Transparent)
             .pointerInput(text) {
-                detectTapGestures(
-                    onLongPress = { showLongPressShape = true }
-                )
+                detectTapGestures(onLongPress = { showShape = true })
             }
             .padding(start = 8.dp, end = 8.dp, top = 13.dp, bottom = 13.dp)
     ) {
         BasicText(
             text = text,
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         )
     }
 }
@@ -586,33 +458,34 @@ private fun ChatScene(
     chatOffsetPx: Int,
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
-    Box(
-        Modifier
+    LazyColumn(
+        modifier = Modifier
             .offset { IntOffset(chatOffsetPx, 0) }
-            .fillMaxSize()
+            .fillMaxSize(),
+        contentPadding = PaddingValues(top = 122.dp, bottom = bottomPadding, start = 16.dp, end = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 122.dp, bottom = bottomPadding, start = 16.dp, end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(messages, key = { it.id }) { message ->
-            AnimatedVisibility(
-                visible = true,
-                enter = fadeIn(animationSpec = tween(150)) +
-                    slideInVertically(
-                        animationSpec = tween(170),
-                        initialOffsetY = { it / 3 }
-                    ) +
-                    scaleIn(
-                        animationSpec = tween(170),
-                        initialScale = 0.96f
-                    )
-            ) {
-                MessageBubble(message)
-            }
+        items(messages, key = { it.id }) { message ->
+            MessageBubbleEntry(message)
         }
-        }
+    }
+}
+
+@Composable
+private fun MessageBubbleEntry(message: ChatMessage) {
+    var visible by remember(message.id) { mutableStateOf(false) }
+
+    LaunchedEffect(message.id) {
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(150)) +
+            slideInVertically(tween(170), initialOffsetY = { it / 3 }) +
+            scaleIn(tween(170), initialScale = 0.96f)
+    ) {
+        MessageBubble(message)
     }
 }
 
@@ -636,18 +509,49 @@ private fun MessageBubble(message: ChatMessage) {
                 .background(if (message.fromMe) Color(0xFF4A7DFF) else Color.White)
                 .padding(start = 15.dp, end = 15.dp, top = 8.dp, bottom = 10.dp)
         ) {
-            BasicText(
-                text = message.text,
-                style = TextStyle(if (message.fromMe) Color.White else Color(0xFF222B3A), fontSize = 16.sp, lineHeight = 22.sp)
-            )
+            if (message.isTyping) {
+                TypingText()
+            } else {
+                BasicText(
+                    text = message.text,
+                    style = TextStyle(
+                        color = if (message.fromMe) Color.White else Color(0xFF222B3A),
+                        fontSize = 16.sp,
+                        lineHeight = 22.sp
+                    )
+                )
+            }
         }
     }
 }
 
 @Composable
+private fun TypingText() {
+    var dots by remember { mutableIntStateOf(1) }
+    var dim by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(460)
+            dots = if (dots >= 3) 1 else dots + 1
+            dim = !dim
+        }
+    }
+
+    BasicText(
+        text = "正在输入${".".repeat(dots)}",
+        style = TextStyle(
+            color = Color(0xFF222B3A).copy(alpha = if (dim) 0.46f else 0.82f),
+            fontSize = 16.sp,
+            lineHeight = 22.sp
+        )
+    )
+}
+
+@Composable
 private fun ChatTopBar(
     backdrop: Backdrop,
-    settings: GlassSettings,
+    settings: AppSettings,
     chatOffsetPx: Int,
     onMenuClick: () -> Unit,
     onAddClick: () -> Unit
@@ -663,7 +567,7 @@ private fun ChatTopBar(
     ) {
         GlassSurface(
             backdrop = backdrop,
-            settings = settings,
+            settings = settings.glass,
             modifier = Modifier.align(Alignment.CenterStart).size(50.dp),
             shape = Capsule(),
             onClick = onMenuClick
@@ -671,7 +575,7 @@ private fun ChatTopBar(
 
         GlassSurface(
             backdrop = backdrop,
-            settings = settings,
+            settings = settings.glass,
             modifier = Modifier.align(Alignment.Center).width(108.dp).height(50.dp),
             shape = Capsule()
         ) {
@@ -680,21 +584,17 @@ private fun ChatTopBar(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFF687BFF)))
+                AvatarImage(settings.assistantAvatarUri, Modifier.size(34.dp))
                 BasicText(
-                    text = "friend",
-                    style = TextStyle(
-                        color = Color(0xFF202838),
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Normal
-                    )
+                    text = settings.assistantName.ifBlank { "friend" },
+                    style = TextStyle(Color(0xFF202838), fontSize = 17.sp, fontWeight = FontWeight.Normal)
                 )
             }
         }
 
         GlassSurface(
             backdrop = backdrop,
-            settings = settings,
+            settings = settings.glass,
             modifier = Modifier.align(Alignment.CenterEnd).size(50.dp),
             shape = Capsule(),
             onClick = onAddClick
@@ -705,7 +605,7 @@ private fun ChatTopBar(
 @Composable
 private fun BoxScope.ChatInputBar(
     backdrop: Backdrop,
-    settings: GlassSettings,
+    glass: GlassSettings,
     chatOffsetPx: Int,
     value: String,
     onValueChange: (String) -> Unit,
@@ -727,16 +627,12 @@ private fun BoxScope.ChatInputBar(
     ) {
         GlassSurface(
             backdrop = backdrop,
-            settings = settings,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 58.dp, max = 132.dp),
+            settings = glass,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp, max = 132.dp),
             shape = RoundedCornerShape(29.dp)
         ) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 18.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
+                Modifier.fillMaxWidth().padding(start = 18.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -748,11 +644,7 @@ private fun BoxScope.ChatInputBar(
                         .heightIn(min = 38.dp, max = 96.dp)
                         .verticalScroll(textScroll)
                         .padding(top = 8.dp, bottom = 7.dp),
-                    textStyle = TextStyle(
-                        color = Color(0xFF162033),
-                        fontSize = 17.sp,
-                        lineHeight = 24.sp
-                    ),
+                    textStyle = TextStyle(Color(0xFF162033), fontSize = 17.sp, lineHeight = 24.sp),
                     singleLine = false,
                     maxLines = 4,
                     cursorBrush = SolidColor(Color(0xFF4A7DFF)),
@@ -761,10 +653,7 @@ private fun BoxScope.ChatInputBar(
                             if (value.isEmpty()) {
                                 BasicText(
                                     text = "Message",
-                                    style = TextStyle(
-                                        color = Color(0xFF697386).copy(alpha = 0.70f),
-                                        fontSize = 17.sp
-                                    )
+                                    style = TextStyle(Color(0xFF697386).copy(alpha = 0.70f), fontSize = 17.sp)
                                 )
                             }
                             innerTextField()
@@ -781,7 +670,7 @@ private fun BoxScope.ChatInputBar(
 @Composable
 private fun DrawerSettingsButton(
     backdrop: Backdrop,
-    settings: GlassSettings,
+    glass: GlassSettings,
     drawerOffsetPx: Int,
     alpha: Float,
     onClick: () -> Unit
@@ -793,7 +682,7 @@ private fun DrawerSettingsButton(
     ) {
         GlassSurface(
             backdrop = backdrop,
-            settings = settings,
+            settings = glass,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .navigationBarsPadding()
@@ -836,48 +725,26 @@ private fun SettingsHomeScene(
             BasicText(
                 text = "设置",
                 modifier = Modifier.padding(start = 2.dp),
-                style = TextStyle(
-                    color = Color(0xFF1F2937),
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
             )
 
             Spacer(Modifier.height(16.dp))
 
-            SettingsListItem(
-                title = "AI 助手设定",
-                subtitle = "头像、名字、提示词和聊天背景",
-                onClick = onOpenAssistantSettings
-            )
-
-            SettingsListItem(
-                title = "API 提供商设置",
-                subtitle = "Base URL、API Key、模型名称",
-                onClick = onOpenApiSettings
-            )
-
-            SettingsListItem(
-                title = "液态玻璃样式设置",
-                subtitle = "模糊、折射、高光和阴影",
-                onClick = onOpenGlassSettings
-            )
+            SettingsListItem("AI 助手设定", "头像、名字、提示词和聊天背景", onOpenAssistantSettings)
+            SettingsListItem("API 提供商设置", "Base URL、API Key、模型名称", onOpenApiSettings)
+            SettingsListItem("液态玻璃样式设置", "模糊、折射、高光和阴影", onOpenGlassSettings)
         }
     }
 }
 
 @Composable
-private fun SettingsListItem(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    var showLongPressShape by remember { mutableStateOf(false) }
+private fun SettingsListItem(title: String, subtitle: String, onClick: () -> Unit) {
+    var showShape by remember { mutableStateOf(false) }
 
-    LaunchedEffect(showLongPressShape) {
-        if (showLongPressShape) {
+    LaunchedEffect(showShape) {
+        if (showShape) {
             delay(520)
-            showLongPressShape = false
+            showShape = false
         }
     }
 
@@ -885,50 +752,48 @@ private fun SettingsListItem(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                if (showLongPressShape) {
-                    Color.White.copy(alpha = 0.78f)
-                } else {
-                    Color.Transparent
-                }
-            )
+            .background(if (showShape) Color.White.copy(alpha = 0.78f) else Color.Transparent)
             .pointerInput(onClick) {
                 detectTapGestures(
                     onTap = { onClick() },
-                    onLongPress = { showLongPressShape = true }
+                    onLongPress = { showShape = true }
                 )
             }
             .padding(start = 8.dp, end = 8.dp, top = 13.dp, bottom = 13.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-        horizontalAlignment = Alignment.Start
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         BasicText(
             text = title,
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         )
-
         BasicText(
             text = subtitle,
-            style = TextStyle(
-                color = Color(0xFF667085),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+            style = TextStyle(Color(0xFF667085), fontSize = 13.sp, lineHeight = 18.sp)
         )
     }
 }
 
 @Composable
-private fun AssistantSettingsScene(offsetPx: Int) {
-    var assistantName by remember { mutableStateOf("friend") }
-    var prompt by remember { mutableStateOf("") }
-    var backgroundName by remember { mutableStateOf("") }
-    var backgroundBlur by remember { mutableStateOf(0f) }
-    var backgroundDim by remember { mutableStateOf(0.15f) }
+private fun AssistantSettingsScene(
+    settings: AppSettings,
+    offsetPx: Int,
+    onSettingsChange: (AppSettings) -> Unit
+) {
+    val context = LocalContext.current
+
+    val avatarLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            persistReadPermission(context, uri)
+            onSettingsChange(settings.copy(assistantAvatarUri = uri.toString()))
+        }
+    }
+
+    val backgroundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            persistReadPermission(context, uri)
+            onSettingsChange(settings.copy(chatBackgroundUri = uri.toString()))
+        }
+    }
 
     Column(
         Modifier
@@ -939,246 +804,87 @@ private fun AssistantSettingsScene(offsetPx: Int) {
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp, vertical = 34.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-        horizontalAlignment = Alignment.Start
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         BasicText(
             text = "AI 助手",
             modifier = Modifier.padding(start = 2.dp),
-            style = TextStyle(
-                color = Color(0xFF1F2937),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold
-            )
+            style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
         )
 
-        Spacer(Modifier.height(4.dp))
-
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 2.dp),
+            Modifier.fillMaxWidth().padding(start = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                Color(0xFF687BFF),
-                                Color(0xFFFF8DB3)
-                            )
-                        )
-                    )
-            )
+            AvatarImage(settings.assistantAvatarUri, Modifier.size(58.dp).clickableNoRipple {
+                avatarLauncher.launch(arrayOf("image/*"))
+            })
 
-            Column(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 BasicText(
                     text = "助手名字",
-                    style = TextStyle(
-                        color = Color(0xFF202838),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    style = TextStyle(Color(0xFF202838), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 )
-
-                BasicTextField(
-                    value = assistantName,
-                    onValueChange = { assistantName = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.White.copy(alpha = 0.62f))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                SettingTextField(
+                    value = settings.assistantName,
+                    placeholder = "friend",
                     singleLine = true,
-                    textStyle = TextStyle(
-                        color = Color(0xFF162033),
-                        fontSize = 15.sp
-                    ),
-                    cursorBrush = SolidColor(Color(0xFF4A7DFF))
+                    onValueChange = { onSettingsChange(settings.copy(assistantName = it)) }
                 )
             }
         }
 
-        AssistantMultilineField(
+        SettingTextArea(
             label = "提示词设定",
-            value = prompt,
+            value = settings.systemPrompt,
             placeholder = "例如：你是一个简洁、温柔、直接的 AI 助手。",
-            onValueChange = { prompt = it }
+            onValueChange = { onSettingsChange(settings.copy(systemPrompt = it)) }
         )
 
-        BackgroundPickerMock(
-            value = backgroundName,
-            onValueChange = { backgroundName = it }
-        )
-
-        ParamSlider("聊天背景模糊度", backgroundBlur, 0f..30f, "px") {
-            backgroundBlur = it
-        }
-
-        ParamSlider("聊天背景明暗度", backgroundDim, 0f..0.75f, "%") {
-            backgroundDim = it
-        }
-
-        Spacer(Modifier.height(10.dp))
-    }
-}
-
-@Composable
-private fun AssistantMultilineField(
-    label: String,
-    value: String,
-    placeholder: String,
-    onValueChange: (String) -> Unit
-) {
-    val scrollState = rememberScrollState()
-
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.Start
-    ) {
-        BasicText(
-            text = label,
-            modifier = Modifier.padding(start = 2.dp),
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            BasicText(
+                text = "聊天背景设定",
+                modifier = Modifier.padding(start = 2.dp),
+                style = TextStyle(Color(0xFF202838), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             )
-        )
 
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 132.dp, max = 220.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color.White.copy(alpha = 0.62f))
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp, vertical = 15.dp),
-            textStyle = TextStyle(
-                color = Color(0xFF162033),
-                fontSize = 15.sp,
-                lineHeight = 22.sp
-            ),
-            cursorBrush = SolidColor(Color(0xFF4A7DFF)),
-            decorationBox = { innerTextField ->
-                Box {
-                    if (value.isEmpty()) {
-                        BasicText(
-                            text = placeholder,
-                            style = TextStyle(
-                                color = Color(0xFF667085).copy(alpha = 0.62f),
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp
-                            )
-                        )
-                    }
-                    innerTextField()
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun BackgroundPickerMock(
-    value: String,
-    onValueChange: (String) -> Unit
-) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.Start
-    ) {
-        BasicText(
-            text = "聊天背景设定",
-            modifier = Modifier.padding(start = 2.dp),
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        )
-
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color.White.copy(alpha = 0.62f))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(138.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                Color(0xFFEAF2FF),
-                                Color(0xFFFFEDF7),
-                                Color(0xFFEFFFF8)
-                            )
-                        )
-                    ),
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.White.copy(alpha = 0.62f))
+                    .clickableNoRipple { backgroundLauncher.launch(arrayOf("image/*")) },
                 contentAlignment = Alignment.Center
             ) {
-                BasicText(
-                    text = "自动裁切为全屏显示",
-                    style = TextStyle(
-                        color = Color(0xFF202838).copy(alpha = 0.72f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
+                if (settings.chatBackgroundUri.isNotBlank()) {
+                    UriImage(settings.chatBackgroundUri, Modifier.fillMaxSize(), ContentScale.Crop)
+                } else {
+                    BasicText(
+                        text = "点击选择本地图片\n自动裁切为全屏显示",
+                        style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 21.sp, textAlign = TextAlign.Center)
                     )
-                )
-            }
-
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = Color(0xFF162033),
-                    fontSize = 14.sp
-                ),
-                cursorBrush = SolidColor(Color(0xFF4A7DFF)),
-                decorationBox = { innerTextField ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty()) {
-                            BasicText(
-                                text = "背景图片名称 / 路径占位",
-                                style = TextStyle(
-                                    color = Color(0xFF667085).copy(alpha = 0.62f),
-                                    fontSize = 14.sp
-                                )
-                            )
-                        }
-                        innerTextField()
-                    }
                 }
-            )
+            }
+        }
+
+        ParamSlider("聊天背景模糊度", settings.backgroundBlur, 0f..30f, "px") {
+            onSettingsChange(settings.copy(backgroundBlur = it))
+        }
+
+        ParamSlider("聊天背景明暗度", settings.backgroundDim, 0f..0.75f, "%") {
+            onSettingsChange(settings.copy(backgroundDim = it))
         }
     }
 }
 
-
 @Composable
-private fun ApiProviderSettingsScene(offsetPx: Int) {
-    var baseUrl by remember { mutableStateOf("") }
-    var apiKey by remember { mutableStateOf("") }
-    var modelName by remember { mutableStateOf("") }
-
+private fun ApiProviderSettingsScene(
+    settings: AppSettings,
+    offsetPx: Int,
+    onSettingsChange: (AppSettings) -> Unit
+) {
     Column(
         Modifier
             .offset { IntOffset(offsetPx, 0) }
@@ -1188,94 +894,23 @@ private fun ApiProviderSettingsScene(offsetPx: Int) {
             .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp, vertical = 34.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-        horizontalAlignment = Alignment.Start
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         BasicText(
             text = "API 提供商",
             modifier = Modifier.padding(start = 2.dp),
-            style = TextStyle(
-                color = Color(0xFF1F2937),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold
-            )
+            style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
         )
 
-        Spacer(Modifier.height(8.dp))
-
-        ApiTextField(
-            label = "Base URL",
-            value = baseUrl,
-            placeholder = "https://api.example.com/v1",
-            onValueChange = { baseUrl = it }
-        )
-
-        ApiTextField(
-            label = "API Key",
-            value = apiKey,
-            placeholder = "sk-...",
-            onValueChange = { apiKey = it }
-        )
-
-        ApiTextField(
-            label = "模型名称",
-            value = modelName,
-            placeholder = "gpt-4o-mini / deepseek-chat / ...",
-            onValueChange = { modelName = it }
-        )
-    }
-}
-
-@Composable
-private fun ApiTextField(
-    label: String,
-    value: String,
-    placeholder: String,
-    onValueChange: (String) -> Unit
-) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.Start
-    ) {
-        BasicText(
-            text = label,
-            style = TextStyle(
-                color = Color(0xFF202838),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        )
-
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color.White.copy(alpha = 0.62f))
-                .padding(horizontal = 16.dp, vertical = 15.dp),
-            singleLine = true,
-            textStyle = TextStyle(
-                color = Color(0xFF162033),
-                fontSize = 15.sp
-            ),
-            cursorBrush = SolidColor(Color(0xFF4A7DFF)),
-            decorationBox = { innerTextField ->
-                Box(contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) {
-                        BasicText(
-                            text = placeholder,
-                            style = TextStyle(
-                                color = Color(0xFF667085).copy(alpha = 0.62f),
-                                fontSize = 15.sp
-                            )
-                        )
-                    }
-                    innerTextField()
-                }
-            }
-        )
+        ApiTextField("Base URL", settings.apiBaseUrl, "https://api.openai.com/v1") {
+            onSettingsChange(settings.copy(apiBaseUrl = it))
+        }
+        ApiTextField("API Key", settings.apiKey, "sk-...") {
+            onSettingsChange(settings.copy(apiKey = it))
+        }
+        ApiTextField("模型名称", settings.modelName, "gpt-4o-mini / deepseek-chat / ...") {
+            onSettingsChange(settings.copy(modelName = it))
+        }
     }
 }
 
@@ -1301,14 +936,9 @@ private fun GlassStyleSettingsScene(
             modifier = Modifier.padding(start = 2.dp),
             style = TextStyle(Color(0xFF1F2937), fontSize = 28.sp, fontWeight = FontWeight.Bold)
         )
-        BasicText(
-            text = "顶部预览会实时使用下面的参数。",
-            style = TextStyle(Color(0xFF667085), fontSize = 14.sp, lineHeight = 20.sp)
-        )
 
-        GlassPreviewCard(settings = settings)
+        SafeGlassPreviewCard(settings)
 
-        SettingsGroupTitle("液态玻璃")
         ParamSlider("背景模糊", settings.glassBlur, 0f..24f, "px") {
             onSettingsUpdate { current -> current.copy(glassBlur = it) }
         }
@@ -1330,65 +960,118 @@ private fun GlassStyleSettingsScene(
         ParamSlider("内阴影", settings.innerShadowAlpha, 0f..0.45f, "%") {
             onSettingsUpdate { current -> current.copy(innerShadowAlpha = it) }
         }
-
-        PlainTextButton("恢复默认") {
-            onSettingsUpdate { GlassSettings() }
-        }
-        Spacer(Modifier.height(10.dp))
     }
 }
 
 @Composable
-private fun GlassPreviewCard(settings: GlassSettings) {
-    val previewBackdrop = rememberLayerBackdrop()
-
+private fun SafeGlassPreviewCard(settings: GlassSettings) {
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(32.dp))
-            .background(Color(0xFFE8ECF7))
+            .background(Brush.linearGradient(listOf(Color(0xFFEAF2FF), Color(0xFFFFEDF7), Color(0xFFEFFFF8))))
     ) {
         Box(
             Modifier
-                .matchParentSize()
-                .layerBackdrop(previewBackdrop)
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.glass_preview),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-        GlassSurface(
-            backdrop = previewBackdrop,
-            settings = settings,
-            modifier = Modifier
                 .align(Alignment.Center)
-                .width(172.dp)
-                .height(52.dp),
-            shape = Capsule()
+                .width(176.dp)
+                .height(54.dp)
+                .clip(Capsule())
+                .background(Color.White.copy(alpha = settings.glassAlpha.coerceIn(0.12f, 0.75f))),
+            contentAlignment = Alignment.Center
         ) {
             BasicText(
                 text = "Glass Preview",
-                style = TextStyle(
-                    color = Color(0xFF202838),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
             )
         }
     }
 }
 
 @Composable
-private fun SettingsGroupTitle(text: String) {
-    BasicText(
-        text = text,
-        style = TextStyle(Color(0xFF202838), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+private fun ApiTextField(label: String, value: String, placeholder: String, onValueChange: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        BasicText(
+            text = label,
+            style = TextStyle(Color(0xFF202838), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        )
+        SettingTextField(value, placeholder, true, onValueChange)
+    }
+}
+
+@Composable
+private fun SettingTextField(
+    value: String,
+    placeholder: String,
+    singleLine: Boolean,
+    onValueChange: (String) -> Unit
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White.copy(alpha = 0.62f))
+            .padding(horizontal = 16.dp, vertical = 15.dp),
+        singleLine = singleLine,
+        textStyle = TextStyle(Color(0xFF162033), fontSize = 15.sp),
+        cursorBrush = SolidColor(Color(0xFF4A7DFF)),
+        decorationBox = { innerTextField ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                    BasicText(
+                        text = placeholder,
+                        style = TextStyle(Color(0xFF667085).copy(alpha = 0.62f), fontSize = 15.sp)
+                    )
+                }
+                innerTextField()
+            }
+        }
     )
+}
+
+@Composable
+private fun SettingTextArea(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        BasicText(
+            text = label,
+            modifier = Modifier.padding(start = 2.dp),
+            style = TextStyle(Color(0xFF202838), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        )
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 132.dp, max = 220.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.White.copy(alpha = 0.62f))
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 15.dp),
+            textStyle = TextStyle(Color(0xFF162033), fontSize = 15.sp, lineHeight = 22.sp),
+            cursorBrush = SolidColor(Color(0xFF4A7DFF)),
+            decorationBox = { innerTextField ->
+                Box {
+                    if (value.isEmpty()) {
+                        BasicText(
+                            text = placeholder,
+                            style = TextStyle(Color(0xFF667085).copy(alpha = 0.62f), fontSize = 15.sp, lineHeight = 22.sp)
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1399,78 +1082,64 @@ private fun ParamSlider(
     suffix: String,
     onValueChange: (Float) -> Unit
 ) {
-    val density = LocalDensity.current
-    var widthPx by remember { mutableStateOf(1f) }
-    val knobSize = 22.dp
-    val knobPx = with(density) { knobSize.toPx() }
+    val step = if (suffix == "%") 0.05f else 1f
     val fraction = ((value - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
 
-    fun updateFromX(x: Float) {
-        val newFraction = (x / widthPx).coerceIn(0f, 1f)
-        val newValue = range.start + (range.endInclusive - range.start) * newFraction
-        onValueChange(newValue)
+    fun setValue(newValue: Float) {
+        onValueChange(newValue.coerceIn(range.start, range.endInclusive))
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            BasicText(
-                text = label,
-                style = TextStyle(Color(0xFF344054), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            )
-            BasicText(
-                text = formatSettingValue(value, suffix),
-                style = TextStyle(Color(0xFF667085), fontSize = 12.sp)
-            )
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.White.copy(alpha = 0.62f))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            BasicText(text = label, style = TextStyle(Color(0xFF344054), fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
+            BasicText(text = formatSettingValue(value, suffix), style = TextStyle(Color(0xFF667085), fontSize = 13.sp))
         }
 
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(30.dp)
-                .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
-                .pointerInput(range, widthPx, onValueChange) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown()
-                        updateFromX(down.position.x)
-                        drag(down.id) { change ->
-                            updateFromX(change.position.x)
-                            change.consume()
-                        }
-                    }
-                },
-            contentAlignment = Alignment.CenterStart
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            SmallAdjustButton("−") { setValue(value - step) }
             Box(
                 Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
+                    .weight(1f)
+                    .height(8.dp)
                     .clip(Capsule())
                     .background(Color(0xFF101828).copy(alpha = 0.12f))
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction)
-                    .height(6.dp)
-                    .clip(Capsule())
-                    .background(Color(0xFF101828).copy(alpha = 0.48f))
-            )
-            Box(
-                Modifier
-                    .offset { IntOffset((fraction * (widthPx - knobPx)).roundToInt(), 0) }
-                    .size(knobSize)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.92f))
-            )
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(8.dp)
+                        .clip(Capsule())
+                        .background(Color(0xFF101828).copy(alpha = 0.48f))
+                )
+            }
+            SmallAdjustButton("+") { setValue(value + step) }
         }
     }
 }
 
-private fun formatSettingValue(value: Float, suffix: String): String {
-    return if (suffix == "%") "${(value * 100f).roundToInt()}%" else "${value.roundToInt()}$suffix"
+@Composable
+private fun SmallAdjustButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFF2F4F7))
+            .clickableNoRipple(onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        BasicText(text = text, style = TextStyle(Color(0xFF202838), fontSize = 22.sp, fontWeight = FontWeight.Bold))
+    }
 }
 
 @Composable
@@ -1482,7 +1151,6 @@ private fun GlassSurface(
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier
             .drawBackdrop(
@@ -1499,12 +1167,7 @@ private fun GlassSurface(
                     }
                 },
                 highlight = { Highlight.Ambient.copy(alpha = settings.highlightAlpha) },
-                shadow = {
-                    Shadow(
-                        radius = 8.dp,
-                        color = Color.Black.copy(alpha = settings.shadowAlpha)
-                    )
-                },
+                shadow = { Shadow(radius = 8.dp, color = Color.Black.copy(alpha = settings.shadowAlpha)) },
                 innerShadow = {
                     InnerShadow(
                         radius = 6.dp,
@@ -1514,15 +1177,61 @@ private fun GlassSurface(
                 },
                 onDrawSurface = { drawRect(Color.White.copy(alpha = settings.glassAlpha)) }
             )
-            .then(
-                if (onClick != null) {
-                    Modifier.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-                } else {
-                    Modifier
-                }
-            ),
+            .then(if (onClick != null) Modifier.clickableNoRipple(onClick) else Modifier),
         contentAlignment = Alignment.Center
     ) { content() }
+}
+
+@Composable
+private fun AvatarImage(uriString: String, modifier: Modifier) {
+    if (uriString.isNotBlank()) {
+        UriImage(uriString, modifier.clip(CircleShape), ContentScale.Crop)
+    } else {
+        Box(
+            modifier
+                .clip(CircleShape)
+                .background(Brush.linearGradient(listOf(Color(0xFF687BFF), Color(0xFFFF8DB3))))
+        )
+    }
+}
+
+@Composable
+private fun UriImage(uriString: String, modifier: Modifier, contentScale: ContentScale) {
+    val context = LocalContext.current
+    val bitmap = remember(uriString) { loadBitmapFromUri(context, uriString) }
+
+    if (bitmap != null) {
+        Image(bitmap = bitmap.asImageBitmap(), contentDescription = null, contentScale = contentScale, modifier = modifier)
+    } else {
+        Box(modifier.background(Color(0xFFE8ECF7)))
+    }
+}
+
+private fun loadBitmapFromUri(context: Context, uriString: String) = runCatching {
+    val uri = Uri.parse(uriString)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+
+    val target = 1600
+    var sample = 1
+    while (bounds.outWidth / sample > target || bounds.outHeight / sample > target) {
+        sample *= 2
+    }
+
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = sample.coerceAtLeast(1)
+        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+    }
+
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+}.getOrNull()
+
+private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier {
+    return clickable(
+        interactionSource = MutableInteractionSource(),
+        indication = null,
+        onClick = onClick
+    )
 }
 
 @Composable
@@ -1540,53 +1249,204 @@ private fun MenuIcon() {
 private fun PlusIcon(fontSize: Int) {
     BasicText(
         text = "+",
-        style = TextStyle(
-            color = Color(0xFF202838),
-            fontSize = fontSize.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center
-        )
+        style = TextStyle(Color(0xFF202838), fontSize = fontSize.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
     )
 }
 
 @Composable
 private fun SendButton(size: Float, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
     Box(
         Modifier
             .size(size.dp)
             .clip(CircleShape)
             .background(Color(0xFFE5E7EB))
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+            .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center
     ) {
         BasicText(
             text = "↑",
-            style = TextStyle(
-                color = Color(0xFF303846),
-                fontSize = 23.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+            style = TextStyle(Color(0xFF303846), fontSize = 23.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         )
     }
 }
 
-@Composable
-private fun PlainTextButton(text: String, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.White)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        BasicText(
-            text = text,
-            style = TextStyle(Color(0xFF202838), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        )
+private fun formatSettingValue(value: Float, suffix: String): String {
+    return if (suffix == "%") "${(value * 100f).roundToInt()}%" else "${value.roundToInt()}$suffix"
+}
+
+private fun persistReadPermission(context: Context, uri: Uri) {
+    runCatching {
+        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
+}
+
+private fun loadAppSettings(context: Context): AppSettings {
+    val p = context.getSharedPreferences("vanilla_settings", Context.MODE_PRIVATE)
+    val glass = GlassSettings(
+        glassBlur = p.getFloat("glassBlur", 1f),
+        lensHeight = p.getFloat("lensHeight", 18f),
+        lensAmount = p.getFloat("lensAmount", 18f),
+        glassAlpha = p.getFloat("glassAlpha", 0.30f),
+        highlightAlpha = p.getFloat("highlightAlpha", 0.65f),
+        shadowAlpha = p.getFloat("shadowAlpha", 0.07f),
+        innerShadowAlpha = p.getFloat("innerShadowAlpha", 0.06f)
+    )
+    return AppSettings(
+        apiBaseUrl = p.getString("apiBaseUrl", "") ?: "",
+        apiKey = p.getString("apiKey", "") ?: "",
+        modelName = p.getString("modelName", "") ?: "",
+        assistantName = p.getString("assistantName", "friend") ?: "friend",
+        systemPrompt = p.getString("systemPrompt", "") ?: "",
+        assistantAvatarUri = p.getString("assistantAvatarUri", "") ?: "",
+        chatBackgroundUri = p.getString("chatBackgroundUri", "") ?: "",
+        backgroundBlur = p.getFloat("backgroundBlur", 0f),
+        backgroundDim = p.getFloat("backgroundDim", 0.15f),
+        glass = glass
+    )
+}
+
+private fun saveAppSettings(context: Context, settings: AppSettings) {
+    context.getSharedPreferences("vanilla_settings", Context.MODE_PRIVATE)
+        .edit()
+        .putString("apiBaseUrl", settings.apiBaseUrl)
+        .putString("apiKey", settings.apiKey)
+        .putString("modelName", settings.modelName)
+        .putString("assistantName", settings.assistantName)
+        .putString("systemPrompt", settings.systemPrompt)
+        .putString("assistantAvatarUri", settings.assistantAvatarUri)
+        .putString("chatBackgroundUri", settings.chatBackgroundUri)
+        .putFloat("backgroundBlur", settings.backgroundBlur)
+        .putFloat("backgroundDim", settings.backgroundDim)
+        .putFloat("glassBlur", settings.glass.glassBlur)
+        .putFloat("lensHeight", settings.glass.lensHeight)
+        .putFloat("lensAmount", settings.glass.lensAmount)
+        .putFloat("glassAlpha", settings.glass.glassAlpha)
+        .putFloat("highlightAlpha", settings.glass.highlightAlpha)
+        .putFloat("shadowAlpha", settings.glass.shadowAlpha)
+        .putFloat("innerShadowAlpha", settings.glass.innerShadowAlpha)
+        .apply()
+}
+
+private fun loadSessions(context: Context): List<String> {
+    val raw = context.getSharedPreferences("vanilla_sessions", Context.MODE_PRIVATE)
+        .getString("titles", "[]") ?: "[]"
+
+    return runCatching {
+        val array = JSONArray(raw)
+        buildList {
+            for (i in 0 until array.length()) {
+                val title = array.optString(i).trim()
+                if (title.isNotEmpty()) add(title)
+            }
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun saveSessions(context: Context, sessions: List<String>) {
+    val array = JSONArray()
+    sessions.forEach { array.put(it) }
+    context.getSharedPreferences("vanilla_sessions", Context.MODE_PRIVATE)
+        .edit()
+        .putString("titles", array.toString())
+        .apply()
+}
+
+private suspend fun requestAiReply(
+    settings: AppSettings,
+    messages: List<ChatMessage>
+): String {
+    val baseUrl = settings.apiBaseUrl.trim()
+    val apiKey = settings.apiKey.trim()
+    val model = settings.modelName.trim()
+
+    if (baseUrl.isEmpty()) return "请先在设置里填写 Base URL。"
+    if (apiKey.isEmpty()) return "请先在设置里填写 API Key。"
+    if (model.isEmpty()) return "请先在设置里填写模型名称。"
+
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            val endpoint = if (baseUrl.endsWith("/chat/completions")) {
+                baseUrl
+            } else {
+                baseUrl.trimEnd('/') + "/chat/completions"
+            }
+
+            val body = JSONObject()
+                .put("model", model)
+                .put("stream", false)
+
+            val messageArray = JSONArray()
+
+            if (settings.systemPrompt.trim().isNotEmpty()) {
+                messageArray.put(
+                    JSONObject()
+                        .put("role", "system")
+                        .put("content", settings.systemPrompt.trim())
+                )
+            }
+
+            messages
+                .filter { !it.isTyping && it.text.isNotBlank() }
+                .takeLast(24)
+                .forEach { message ->
+                    messageArray.put(
+                        JSONObject()
+                            .put("role", if (message.fromMe) "user" else "assistant")
+                            .put("content", message.text)
+                    )
+                }
+
+            body.put("messages", messageArray)
+
+            val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 30000
+                readTimeout = 60000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Authorization", "Bearer $apiKey")
+            }
+
+            connection.outputStream.use { output ->
+                output.write(body.toString().toByteArray(Charsets.UTF_8))
+            }
+
+            val status = connection.responseCode
+            val responseText = if (status in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            }
+
+            if (status !in 200..299) {
+                val errorMessage = runCatching {
+                    JSONObject(responseText)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                        .orEmpty()
+                }.getOrDefault("")
+
+                return@runCatching if (errorMessage.isNotBlank()) {
+                    "请求失败：$errorMessage"
+                } else {
+                    "请求失败：HTTP $status"
+                }
+            }
+
+            JSONObject(responseText)
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .optString("content")
+        }.getOrElse { e ->
+            "请求出错：${e.message ?: e::class.java.simpleName}"
+        }
+    }
+}
+
+private fun stripThinkTags(text: String): String {
+    return text
+        .replace(Regex("(?is)<think>.*?</think>"), "")
+        .replace(Regex("(?is)<think>.*"), "")
+        .trim()
 }
