@@ -370,9 +370,9 @@ private fun VanillaApp() {
             onAddClick = {
                 val firstText = messages.firstOrNull { !it.isTyping }?.text?.trim().orEmpty()
                 if (firstText.isNotEmpty()) {
-                    val title = firstText.replace("
-", " ").replace("
-", " ").take(32)
+                    val title = firstText
+                        .replace(Regex("\\s+"), " ")
+                        .take(32)
                     sessions.add(title)
                     messages.clear()
                     inputText = ""
@@ -790,20 +790,50 @@ private fun FormulaBlock(value: String) {
 
 private fun parseMessageParts(text: String): List<MessagePart> {
     val result = mutableListOf<MessagePart>()
-    val codeRegex = Regex("```([A-Za-z0-9_+-]*)\n?([\s\S]*?)```")
-    var last = 0
+    var cursor = 0
 
-    codeRegex.findAll(text).forEach { match ->
-        val before = text.substring(last, match.range.first)
-        result += parseTextAndFormula(before)
+    while (cursor < text.length) {
+        val codeStart = text.indexOf("```", cursor)
+
+        if (codeStart < 0) {
+            result += parseTextAndFormula(text.substring(cursor))
+            break
+        }
+
+        if (codeStart > cursor) {
+            result += parseTextAndFormula(text.substring(cursor, codeStart))
+        }
+
+        val afterFence = codeStart + 3
+        val lineEnd = text.indexOf('\n', afterFence)
+        val codeEndSearchFrom = if (lineEnd >= 0) lineEnd + 1 else afterFence
+        val codeEnd = text.indexOf("```", codeEndSearchFrom)
+
+        if (codeEnd < 0) {
+            result += parseTextAndFormula(text.substring(codeStart))
+            break
+        }
+
+        val language = if (lineEnd >= 0 && lineEnd < codeEnd) {
+            text.substring(afterFence, lineEnd).trim()
+        } else {
+            ""
+        }
+
+        val codeBodyStart = if (lineEnd >= 0 && lineEnd < codeEnd) {
+            lineEnd + 1
+        } else {
+            afterFence
+        }
+
         result += MessagePart.Code(
-            language = match.groupValues.getOrNull(1).orEmpty(),
-            value = match.groupValues.getOrNull(2).orEmpty()
+            language = language,
+            value = text.substring(codeBodyStart, codeEnd)
         )
-        last = match.range.last + 1
+
+        cursor = codeEnd + 3
     }
 
-    result += parseTextAndFormula(text.substring(last))
     return result.filter {
         when (it) {
             is MessagePart.Text -> it.value.isNotBlank()
@@ -815,47 +845,80 @@ private fun parseMessageParts(text: String): List<MessagePart> {
 
 private fun parseTextAndFormula(text: String): List<MessagePart> {
     val result = mutableListOf<MessagePart>()
-    val formulaRegex = Regex("(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))")
-    var last = 0
+    var cursor = 0
 
-    formulaRegex.findAll(text).forEach { match ->
-        val before = text.substring(last, match.range.first)
-        if (before.isNotBlank()) result += MessagePart.Text(before)
+    fun nextMarkerIndex(from: Int): Pair<Int, String>? {
+        val markers = listOf(
+            Pair(text.indexOf("\$\$", from), "\$\$"),
+            Pair(text.indexOf("\\[", from), "\\["),
+            Pair(text.indexOf("\\(", from), "\\(")
+        ).filter { it.first >= 0 }
 
-        val raw = match.value
-            .removePrefix("$$").removeSuffix("$$")
-            .removePrefix("\[").removeSuffix("\]")
-            .removePrefix("\(").removeSuffix("\)")
-            .trim()
-
-        result += MessagePart.Formula(raw)
-        last = match.range.last + 1
+        return markers.minByOrNull { it.first }
     }
 
-    val remain = text.substring(last)
-    if (remain.isNotBlank()) result += MessagePart.Text(remain)
+    while (cursor < text.length) {
+        val next = nextMarkerIndex(cursor)
+
+        if (next == null) {
+            val remain = text.substring(cursor)
+            if (remain.isNotBlank()) result += MessagePart.Text(remain)
+            break
+        }
+
+        val startIndex = next.first
+        val startMarker = next.second
+
+        if (startIndex > cursor) {
+            val before = text.substring(cursor, startIndex)
+            if (before.isNotBlank()) result += MessagePart.Text(before)
+        }
+
+        val endMarker = when (startMarker) {
+            "\$\$" -> "\$\$"
+            "\\[" -> "\\]"
+            "\\(" -> "\\)"
+            else -> ""
+        }
+
+        val contentStart = startIndex + startMarker.length
+        val endIndex = text.indexOf(endMarker, contentStart)
+
+        if (endIndex < 0) {
+            val remain = text.substring(startIndex)
+            if (remain.isNotBlank()) result += MessagePart.Text(remain)
+            break
+        }
+
+        val formula = text.substring(contentStart, endIndex).trim()
+        if (formula.isNotBlank()) {
+            result += MessagePart.Formula(formula)
+        }
+
+        cursor = endIndex + endMarker.length
+    }
+
     return result
 }
 
 private fun prettifyFormula(value: String): String {
     return value
-        .replace("\times", "×")
-        .replace("\cdot", "·")
-        .replace("\leq", "≤")
-        .replace("\geq", "≥")
-        .replace("\neq", "≠")
-        .replace("\approx", "≈")
-        .replace("\infty", "∞")
-        .replace("\sqrt", "√")
-        .replace("\pi", "π")
-        .replace("\alpha", "α")
-        .replace("\beta", "β")
-        .replace("\gamma", "γ")
-        .replace("\theta", "θ")
-        .replace("\lambda", "λ")
-        .replace("\mu", "μ")
+        .replace("\\times", "×")
+        .replace("\\cdot", "·")
+        .replace("\\leq", "≤")
+        .replace("\\geq", "≥")
+        .replace("\\neq", "≠")
+        .replace("\\approx", "≈")
+        .replace("\\infty", "∞")
+        .replace("\\sqrt", "√")
+        .replace("\\pi", "π")
+        .replace("\\alpha", "α")
+        .replace("\\beta", "β")
+        .replace("\\gamma", "γ")
+        .replace("\\theta", "θ")
+        .replace("\\lambda", "λ")
+        .replace("\\mu", "μ")
 }
-
 @Composable
 private fun ChatTopBar(
     backdrop: Backdrop,
@@ -1840,8 +1903,26 @@ private suspend fun requestAiReplyStreaming(
 }
 
 private fun stripThinkTags(text: String): String {
-    return text
-        .replace(Regex("(?is)<think>.*?</think>"), "")
-        .replace(Regex("(?is)<think>.*"), "")
-        .trim()
+    var output = text
+
+    while (true) {
+        val start = output.indexOf("<think", ignoreCase = true)
+        if (start < 0) break
+
+        val tagEnd = output.indexOf(">", start)
+        if (tagEnd < 0) {
+            output = output.substring(0, start)
+            break
+        }
+
+        val end = output.indexOf("</think>", tagEnd + 1, ignoreCase = true)
+
+        output = if (end >= 0) {
+            output.removeRange(start, end + "</think>".length)
+        } else {
+            output.substring(0, start)
+        }
+    }
+
+    return output.trim()
 }
